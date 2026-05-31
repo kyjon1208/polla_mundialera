@@ -20,18 +20,28 @@ KEY_PATH = "secret.key"
 def load_fernet() -> Fernet:
     """
     Carga la llave usada para encriptar y desencriptar códigos.
-    La llave debe existir en la raíz del proyecto como secret.key.
+    En local puede leer secret.key.
+    En Streamlit Cloud lee SECRET_KEY desde Secrets.
     """
+    try:
+        secret_key = st.secrets.get("SECRET_KEY", None)
+    except FileNotFoundError:
+        secret_key = None
+    except Exception:
+        secret_key = None
+
+    if secret_key:
+        return Fernet(str(secret_key).encode("utf-8"))
+
     key_file = Path(KEY_PATH)
 
     if not key_file.exists():
         raise FileNotFoundError(
-            "No existe secret.key. Ejecuta primero: python init_db.py"
+            "No existe secret.key ni SECRET_KEY. Ejecuta primero python init_db.py o configura SECRET_KEY."
         )
 
     key = key_file.read_bytes()
     return Fernet(key)
-
 
 def encrypt_code(codigo: str) -> str:
     """

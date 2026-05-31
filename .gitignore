@@ -7,5 +7,11 @@ polla_mundialera.db
 secret.key
 
 .streamlit/secrets.toml
+.streamlit/secrets copy.toml
 
 .env
+
+ssl.txt
+src/db copy.py
+
+*.csv
