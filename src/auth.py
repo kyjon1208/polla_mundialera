@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
 
 import bcrypt
 import streamlit as st
 from cryptography.fernet import Fernet
 
-from src.db import get_sqlite_connection
+from src.db import execute, fetch_all, fetch_one
 
 
 KEY_PATH = "secret.key"
@@ -20,8 +19,9 @@ KEY_PATH = "secret.key"
 def load_fernet() -> Fernet:
     """
     Carga la llave usada para encriptar y desencriptar códigos.
-    En local puede leer secret.key.
+
     En Streamlit Cloud lee SECRET_KEY desde Secrets.
+    En local, si no existe SECRET_KEY, lee el archivo secret.key.
     """
     try:
         secret_key = st.secrets.get("SECRET_KEY", None)
@@ -37,11 +37,12 @@ def load_fernet() -> Fernet:
 
     if not key_file.exists():
         raise FileNotFoundError(
-            "No existe secret.key ni SECRET_KEY. Ejecuta primero python init_db.py o configura SECRET_KEY."
+            "No existe secret.key ni SECRET_KEY. "
+            "Ejecuta python init_db.py en local o configura SECRET_KEY en Streamlit."
         )
 
-    key = key_file.read_bytes()
-    return Fernet(key)
+    return Fernet(key_file.read_bytes())
+
 
 def encrypt_code(codigo: str) -> str:
     """
@@ -98,6 +99,10 @@ def validate_code_format(codigo: str) -> bool:
 def authenticate_user(usuario: str, codigo: str):
     """
     Autentica un usuario usando usuario + código de 4 dígitos.
+
+    Importante:
+    Esta función NO usa SQLite directo.
+    Usa fetch_one(), así funciona con SQLite o Supabase/PostgreSQL.
     """
     usuario = usuario.strip()
     codigo = codigo.strip()
@@ -108,23 +113,19 @@ def authenticate_user(usuario: str, codigo: str):
     if not validate_code_format(codigo):
         return None
 
-    conn = get_sqlite_connection()
-    conn.row_factory = sqlite3.Row
-
-    try:
-        user = conn.execute("""
-            SELECT
-                id_usuario,
-                usuario,
-                codigo_hash,
-                nombre,
-                rol,
-                estado_activo
-            FROM usuarios
-            WHERE usuario = ?
-        """, (usuario,)).fetchone()
-    finally:
-        conn.close()
+    user = fetch_one("""
+        SELECT
+            id_usuario,
+            usuario,
+            codigo_hash,
+            nombre,
+            rol,
+            estado_activo
+        FROM usuarios
+        WHERE usuario = :usuario
+    """, {
+        "usuario": usuario
+    })
 
     if not user:
         return None
@@ -260,10 +261,8 @@ def create_user(
     except Exception as e:
         return False, f"Error encriptando código: {e}"
 
-    conn = get_sqlite_connection()
-
     try:
-        cursor = conn.execute("""
+        rows = execute("""
             INSERT INTO usuarios (
                 usuario,
                 codigo_hash,
@@ -272,30 +271,34 @@ def create_user(
                 rol,
                 estado_activo
             )
-            VALUES (?, ?, ?, ?, ?, 1)
-        """, (
-            usuario,
-            codigo_hash,
-            codigo_encriptado,
-            nombre,
-            rol,
-        ))
+            VALUES (
+                :usuario,
+                :codigo_hash,
+                :codigo_encriptado,
+                :nombre,
+                :rol,
+                1
+            )
+        """, {
+            "usuario": usuario,
+            "codigo_hash": codigo_hash,
+            "codigo_encriptado": codigo_encriptado,
+            "nombre": nombre,
+            "rol": rol,
+        })
 
-        conn.commit()
-
-        if cursor.rowcount == 1:
+        if rows >= 0:
             return True, "Usuario creado correctamente."
 
         return False, "No se insertó ningún registro."
 
-    except sqlite3.IntegrityError:
-        return False, "Ya existe un usuario con ese nombre de usuario."
-
     except Exception as e:
-        return False, f"Error creando usuario: {e}"
+        error_text = str(e).lower()
 
-    finally:
-        conn.close()
+        if "unique" in error_text or "duplicate" in error_text:
+            return False, "Ya existe un usuario con ese nombre de usuario."
+
+        return False, f"Error creando usuario: {e}"
 
 
 def update_user_code(id_usuario: int, nuevo_codigo: str) -> tuple[bool, str]:
@@ -314,33 +317,26 @@ def update_user_code(id_usuario: int, nuevo_codigo: str) -> tuple[bool, str]:
     except Exception as e:
         return False, f"Error encriptando código: {e}"
 
-    conn = get_sqlite_connection()
-
     try:
-        cursor = conn.execute("""
+        rows = execute("""
             UPDATE usuarios
             SET
-                codigo_hash = ?,
-                codigo_encriptado = ?
-            WHERE id_usuario = ?
-        """, (
-            codigo_hash,
-            codigo_encriptado,
-            id_usuario,
-        ))
+                codigo_hash = :codigo_hash,
+                codigo_encriptado = :codigo_encriptado
+            WHERE id_usuario = :id_usuario
+        """, {
+            "codigo_hash": codigo_hash,
+            "codigo_encriptado": codigo_encriptado,
+            "id_usuario": id_usuario,
+        })
 
-        conn.commit()
-
-        if cursor.rowcount > 0:
+        if rows > 0:
             return True, "Código actualizado correctamente."
 
         return False, "No se encontró el usuario."
 
     except Exception as e:
         return False, f"Error actualizando código: {e}"
-
-    finally:
-        conn.close()
 
 
 def update_user_status(id_usuario: int, estado_activo: int) -> tuple[bool, str]:
@@ -349,21 +345,17 @@ def update_user_status(id_usuario: int, estado_activo: int) -> tuple[bool, str]:
     """
     estado_activo = 1 if int(estado_activo) == 1 else 0
 
-    conn = get_sqlite_connection()
-
     try:
-        cursor = conn.execute("""
+        rows = execute("""
             UPDATE usuarios
-            SET estado_activo = ?
-            WHERE id_usuario = ?
-        """, (
-            estado_activo,
-            id_usuario,
-        ))
+            SET estado_activo = :estado_activo
+            WHERE id_usuario = :id_usuario
+        """, {
+            "estado_activo": estado_activo,
+            "id_usuario": id_usuario,
+        })
 
-        conn.commit()
-
-        if cursor.rowcount > 0:
+        if rows > 0:
             return True, "Estado del usuario actualizado correctamente."
 
         return False, "No se encontró el usuario."
@@ -371,33 +363,24 @@ def update_user_status(id_usuario: int, estado_activo: int) -> tuple[bool, str]:
     except Exception as e:
         return False, f"Error actualizando usuario: {e}"
 
-    finally:
-        conn.close()
-
 
 def get_all_users_with_codes() -> list[dict]:
     """
     Retorna todos los usuarios con el código desencriptado.
     Solo debería usarse en pantallas administrativas.
     """
-    conn = get_sqlite_connection()
-    conn.row_factory = sqlite3.Row
-
-    try:
-        rows = conn.execute("""
-            SELECT
-                id_usuario,
-                usuario,
-                nombre,
-                rol,
-                estado_activo,
-                codigo_encriptado,
-                fecha_creacion
-            FROM usuarios
-            ORDER BY id_usuario
-        """).fetchall()
-    finally:
-        conn.close()
+    rows = fetch_all("""
+        SELECT
+            id_usuario,
+            usuario,
+            nombre,
+            rol,
+            estado_activo,
+            codigo_encriptado,
+            fecha_creacion
+        FROM usuarios
+        ORDER BY id_usuario
+    """)
 
     users = []
 
@@ -424,23 +407,17 @@ def get_user_by_username(usuario: str):
     """
     Busca un usuario por nombre de usuario.
     """
-    conn = get_sqlite_connection()
-    conn.row_factory = sqlite3.Row
-
-    try:
-        user = conn.execute("""
-            SELECT
-                id_usuario,
-                usuario,
-                nombre,
-                rol,
-                estado_activo,
-                codigo_encriptado,
-                fecha_creacion
-            FROM usuarios
-            WHERE usuario = ?
-        """, (usuario.strip(),)).fetchone()
-    finally:
-        conn.close()
-
-    return user
+    return fetch_one("""
+        SELECT
+            id_usuario,
+            usuario,
+            nombre,
+            rol,
+            estado_activo,
+            codigo_encriptado,
+            fecha_creacion
+        FROM usuarios
+        WHERE usuario = :usuario
+    """, {
+        "usuario": usuario.strip()
+    })
