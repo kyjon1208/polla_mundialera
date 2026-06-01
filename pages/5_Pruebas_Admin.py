@@ -54,7 +54,7 @@ def get_matches_df() -> pd.DataFrame:
             ON p.id_equipo_visitante = ev.id_equipo
         LEFT JOIN ventanas_prediccion vp
             ON p.id_partido = vp.id_partido
-        ORDER BY datetime(p.fecha_hora_partido) ASC
+        ORDER BY p.fecha_hora_partido ASC
     """)
 
 
