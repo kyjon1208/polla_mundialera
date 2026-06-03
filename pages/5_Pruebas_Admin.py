@@ -1,11 +1,12 @@
-import sqlite3
+from __future__ import annotations
+
 from datetime import datetime, timedelta
 
 import pandas as pd
 import streamlit as st
 
 from src.auth import create_user, require_admin
-from src.db import execute, fetch_df, get_sqlite_connection
+from src.db import execute, fetch_df, fetch_one
 from src.navigation import render_sidebar_navigation
 
 
@@ -76,15 +77,25 @@ def insert_team(nombre: str, grupo: str, codigo_fifa: str) -> tuple[bool, str]:
                 grupo,
                 codigo_fifa
             )
-            VALUES (?, ?, ?)
-        """, (nombre, grupo, codigo_fifa))
+            VALUES (
+                :nombre,
+                :grupo,
+                :codigo_fifa
+            )
+        """, {
+            "nombre": nombre,
+            "grupo": grupo,
+            "codigo_fifa": codigo_fifa,
+        })
 
         return True, "Equipo creado correctamente."
 
-    except sqlite3.IntegrityError:
-        return False, "Ya existe un equipo con ese nombre o código FIFA."
-
     except Exception as e:
+        error_text = str(e).lower()
+
+        if "unique" in error_text or "duplicate" in error_text:
+            return False, "Ya existe un equipo con ese nombre o código FIFA."
+
         return False, f"Error creando equipo: {e}"
 
 
@@ -112,10 +123,8 @@ def insert_match(
     if not api_match_id:
         return False, "El API Match ID es obligatorio."
 
-    conn = get_sqlite_connection()
-
     try:
-        cursor = conn.execute("""
+        execute("""
             INSERT INTO partidos (
                 fase,
                 grupo,
@@ -127,45 +136,68 @@ def insert_match(
                 goles_visitante_real,
                 api_match_id
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            fase,
-            grupo,
-            id_equipo_local,
-            id_equipo_visitante,
-            fecha_hora_partido.strftime("%Y-%m-%d %H:%M:%S"),
-            estado_partido,
-            goles_local_real,
-            goles_visitante_real,
-            api_match_id,
-        ))
+            VALUES (
+                :fase,
+                :grupo,
+                :id_equipo_local,
+                :id_equipo_visitante,
+                :fecha_hora_partido,
+                :estado_partido,
+                :goles_local_real,
+                :goles_visitante_real,
+                :api_match_id
+            )
+        """, {
+            "fase": fase,
+            "grupo": grupo,
+            "id_equipo_local": id_equipo_local,
+            "id_equipo_visitante": id_equipo_visitante,
+            "fecha_hora_partido": fecha_hora_partido,
+            "estado_partido": estado_partido,
+            "goles_local_real": goles_local_real,
+            "goles_visitante_real": goles_visitante_real,
+            "api_match_id": api_match_id,
+        })
 
-        id_partido = cursor.lastrowid
+        partido = fetch_one("""
+            SELECT id_partido
+            FROM partidos
+            WHERE api_match_id = :api_match_id
+        """, {
+            "api_match_id": api_match_id,
+        })
 
-        conn.execute("""
+        if not partido:
+            return False, "El partido se insertó, pero no se pudo recuperar su ID."
+
+        id_partido = int(partido["id_partido"])
+
+        execute("""
             INSERT INTO ventanas_prediccion (
                 id_partido,
                 fecha_apertura,
                 fecha_cierre
             )
-            VALUES (?, ?, ?)
-        """, (
-            id_partido,
-            fecha_apertura.strftime("%Y-%m-%d %H:%M:%S"),
-            fecha_cierre.strftime("%Y-%m-%d %H:%M:%S"),
-        ))
+            VALUES (
+                :id_partido,
+                :fecha_apertura,
+                :fecha_cierre
+            )
+        """, {
+            "id_partido": id_partido,
+            "fecha_apertura": fecha_apertura,
+            "fecha_cierre": fecha_cierre,
+        })
 
-        conn.commit()
         return True, "Partido creado correctamente."
 
-    except sqlite3.IntegrityError:
-        return False, "Ya existe un partido con ese API Match ID o una ventana asociada."
-
     except Exception as e:
-        return False, f"Error creando partido: {e}"
+        error_text = str(e).lower()
 
-    finally:
-        conn.close()
+        if "unique" in error_text or "duplicate" in error_text:
+            return False, "Ya existe un partido con ese API Match ID o una ventana asociada."
+
+        return False, f"Error creando partido: {e}"
 
 
 def update_match_result(
@@ -182,16 +214,16 @@ def update_match_result(
         execute("""
             UPDATE partidos
             SET
-                estado_partido = ?,
-                goles_local_real = ?,
-                goles_visitante_real = ?
-            WHERE id_partido = ?
-        """, (
-            estado_partido,
-            goles_local_real,
-            goles_visitante_real,
-            id_partido,
-        ))
+                estado_partido = :estado_partido,
+                goles_local_real = :goles_local_real,
+                goles_visitante_real = :goles_visitante_real
+            WHERE id_partido = :id_partido
+        """, {
+            "estado_partido": estado_partido,
+            "goles_local_real": goles_local_real,
+            "goles_visitante_real": goles_visitante_real,
+            "id_partido": id_partido,
+        })
 
         return True, "Resultado actualizado correctamente."
 
@@ -276,7 +308,11 @@ with tab_equipos:
     if equipos_df.empty:
         st.info("No hay equipos registrados.")
     else:
-        st.dataframe(equipos_df, use_container_width=True, hide_index=True)
+        st.dataframe(
+            equipos_df,
+            use_container_width=True,
+            hide_index=True,
+        )
 
 
 # =========================================================
@@ -377,16 +413,19 @@ with tab_partidos:
                     value=now.date(),
                     key="fecha_apertura_custom_date",
                 )
+
                 fecha_apertura_time = st.time_input(
                     "Hora apertura",
                     value=(now - timedelta(hours=1)).time().replace(second=0, microsecond=0),
                     key="fecha_apertura_custom_time",
                 )
+
                 fecha_cierre_date = st.date_input(
                     "Fecha cierre",
                     value=now.date(),
                     key="fecha_cierre_custom_date",
                 )
+
                 fecha_cierre_time = st.time_input(
                     "Hora cierre",
                     value=(now + timedelta(hours=1)).time().replace(second=0, microsecond=0),
@@ -452,7 +491,11 @@ with tab_partidos:
     if matches_df.empty:
         st.info("No hay partidos registrados.")
     else:
-        st.dataframe(matches_df, use_container_width=True, hide_index=True)
+        st.dataframe(
+            matches_df,
+            use_container_width=True,
+            hide_index=True,
+        )
 
 
 # =========================================================
