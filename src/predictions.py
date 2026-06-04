@@ -15,6 +15,9 @@ APP_TIMEZONE = "America/Bogota"
 def now_colombia_sql() -> str:
     """
     Fecha/hora actual en hora Colombia para PostgreSQL/Supabase.
+
+    Se usa para que el cierre de predicciones sea según hora Colombia,
+    no según la hora UTC del servidor.
     """
     return f"(CURRENT_TIMESTAMP AT TIME ZONE '{APP_TIMEZONE}')"
 
@@ -257,7 +260,8 @@ def ensure_default_predictions(id_usuario: int) -> None:
     Crea predicciones 0-0 por defecto para un usuario específico
     en partidos cuyo tiempo de predicción ya cerró.
 
-    Esta función se mantiene por compatibilidad.
+    Solo aplica si el usuario es participante activo.
+    No aplica para admin.
     """
 
     sql = f"""
