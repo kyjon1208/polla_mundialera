@@ -8,7 +8,7 @@ from src.navigation import render_sidebar_navigation
 from src.predictions import ensure_default_predictions_for_all_participants
 from src.leaderboard import (
     get_leaderboard,
-    get_recent_predictions,
+    get_today_predictions_matrix,
     recalculate_scores,
 )
 
@@ -33,10 +33,7 @@ st.caption("Consulta la clasificación actual de los participantes de la Polla M
 # =========================================================
 
 with st.spinner("Actualizando predicciones por defecto y recalculando puntajes..."):
-    # Crea 0-0 para todos los participantes activos, excluyendo admins.
     ensure_default_predictions_for_all_participants()
-
-    # Recalcula la tabla de posiciones.
     recalculate_scores()
 
 
@@ -45,6 +42,9 @@ with st.spinner("Actualizando predicciones por defecto y recalculando puntajes..
 # =========================================================
 
 def filter_leaderboard(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Aplica filtros a la tabla de posiciones.
+    """
     if df is None or df.empty:
         return df
 
@@ -91,7 +91,7 @@ def filter_leaderboard(df: pd.DataFrame) -> pd.DataFrame:
         search_text = search_text.lower().strip()
 
         searchable_columns = [
-            col for col in ["nombre", "usuario", "participante"]
+            col for col in ["nombre", "usuario", "participante", "Participante"]
             if col in filtered.columns
         ]
 
@@ -121,72 +121,6 @@ def filter_leaderboard(df: pd.DataFrame) -> pd.DataFrame:
     return filtered
 
 
-def filter_recent_predictions(df: pd.DataFrame) -> pd.DataFrame:
-    if df is None or df.empty:
-        return df
-
-    filtered = df.copy()
-
-    st.markdown("#### Filtros de últimos partidos")
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        if "fase" in filtered.columns:
-            fases = sorted(filtered["fase"].dropna().unique().tolist())
-            fase_selected = st.multiselect(
-                "Fase",
-                options=fases,
-                default=[],
-                key="filter_recent_fase"
-            )
-        else:
-            fase_selected = []
-
-    with col2:
-        if "estado_partido" in filtered.columns:
-            estados = sorted(filtered["estado_partido"].dropna().unique().tolist())
-            estado_selected = st.multiselect(
-                "Estado partido",
-                options=estados,
-                default=[],
-                key="filter_recent_estado"
-            )
-        else:
-            estado_selected = []
-
-    with col3:
-        equipo_text = st.text_input(
-            "Buscar equipo",
-            placeholder="Colombia, Brasil...",
-            key="filter_recent_equipo"
-        )
-
-    if fase_selected and "fase" in filtered.columns:
-        filtered = filtered[filtered["fase"].isin(fase_selected)]
-
-    if estado_selected and "estado_partido" in filtered.columns:
-        filtered = filtered[filtered["estado_partido"].isin(estado_selected)]
-
-    if equipo_text:
-        equipo_text = equipo_text.lower().strip()
-
-        equipo_columns = [
-            col for col in ["equipo_local", "equipo_visitante"]
-            if col in filtered.columns
-        ]
-
-        if equipo_columns:
-            mask = False
-
-            for col in equipo_columns:
-                mask = mask | filtered[col].astype(str).str.lower().str.contains(equipo_text, na=False)
-
-            filtered = filtered[mask]
-
-    return filtered
-
-
 # =========================================================
 # TABLA DE POSICIONES
 # =========================================================
@@ -205,32 +139,31 @@ else:
     st.dataframe(
         filtered_leaderboard,
         use_container_width=True,
-        hide_index=True
+        hide_index=True,
     )
 
 
 # =========================================================
-# ÚLTIMAS PREDICCIONES / RESULTADOS
+# PREDICCIONES DE PARTIDOS DEL DÍA
 # =========================================================
 
 st.divider()
 
-st.subheader("Últimos partidos con predicciones")
+st.subheader("Predicciones de los partidos de hoy")
 
-recent_predictions = get_recent_predictions()
+today_predictions_matrix = get_today_predictions_matrix()
 
-if recent_predictions is None or recent_predictions.empty:
-    st.info("Todavía no hay predicciones recientes para mostrar.")
+if today_predictions_matrix is None or today_predictions_matrix.empty:
+    st.info("Hoy no hay partidos con predicciones para mostrar.")
 else:
-    filtered_recent_predictions = filter_recent_predictions(recent_predictions)
-
-    st.write(
-        f"Registros mostrados: **{len(filtered_recent_predictions)}** "
-        f"de **{len(recent_predictions)}**"
+    st.caption(
+        "Cada fila corresponde a un participante. "
+        "Por cada partido del día se muestra la predicción, el marcador real si el partido está en juego o terminado, "
+        "y los puntos obtenidos. Las columnas con guiones separan visualmente cada partido."
     )
 
     st.dataframe(
-        filtered_recent_predictions,
+        today_predictions_matrix,
         use_container_width=True,
-        hide_index=True
+        hide_index=True,
     )
