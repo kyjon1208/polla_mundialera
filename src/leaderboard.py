@@ -33,10 +33,8 @@ def now_colombia_condition_for_today(column_name: str = "p.fecha_hora_partido") 
 def get_winner(goals_home: int, goals_away: int) -> str:
     if goals_home > goals_away:
         return "local"
-
     if goals_home < goals_away:
         return "visitante"
-
     return "empate"
 
 
@@ -71,13 +69,6 @@ def calculate_match_score(
 ) -> dict:
     """
     Calcula el puntaje de una predicción según los criterios definidos.
-
-    Retorna:
-    - criterio_aplicado
-    - puntos
-    - marcador_completo
-    - acierto_ganador_empate
-    - diferencia_directa
     """
 
     real_home = int(real_home)
@@ -232,7 +223,6 @@ def recalculate_scores() -> None:
                 "id_usuario": int(row["id_usuario"]),
                 "id_partido": int(row["id_partido"]),
             })
-
         else:
             execute("""
                 INSERT INTO puntajes_partido (
@@ -318,21 +308,22 @@ def get_leaderboard() -> pd.DataFrame:
 
 
 # =========================================================
-# PREDICCIONES DEL DÍA EN FORMATO MATRIZ
+# MATRIZ DE PREDICCIONES DEL DÍA
 # =========================================================
 
 def get_today_predictions_matrix() -> pd.DataFrame:
     """
-    Retorna una matriz de predicciones de los partidos del día actual.
+    Retorna una matriz tipo:
+    Participante | Partido | Marcador Partido | puntos obtenidos | separador | ...
 
-    Estructura:
     - Una fila por participante.
-    - No muestra usuario, solo nombre del participante.
-    - Por cada partido del día:
-        - Predicción del participante.
-        - Marcador real del partido, solo si está En juego o Terminado.
-        - Puntos obtenidos por ese partido.
-        - Separador visual entre partidos.
+    - Solo muestra el nombre del participante.
+    - La columna del partido contiene la predicción del usuario.
+    - 'Marcador Partido' muestra:
+        * el marcador real si está En juego o Terminado
+        * o el estado si aún no comienza
+    - 'puntos obtenidos' muestra puntos solo si el partido está En juego o Terminado.
+    - Se agrega una columna vacía entre partidos para separar visualmente.
     """
 
     today_condition = now_colombia_condition_for_today("p.fecha_hora_partido")
@@ -343,8 +334,6 @@ def get_today_predictions_matrix() -> pd.DataFrame:
             u.nombre AS participante,
 
             p.id_partido,
-            p.fase,
-            p.grupo,
             el.nombre AS equipo_local,
             ev.nombre AS equipo_visitante,
             p.fecha_hora_partido,
@@ -377,9 +366,9 @@ def get_today_predictions_matrix() -> pd.DataFrame:
           AND {today_condition}
 
         ORDER BY
-            u.nombre ASC,
             p.fecha_hora_partido ASC,
-            p.id_partido ASC
+            p.id_partido ASC,
+            u.nombre ASC
     """
 
     df = fetch_df(sql)
@@ -387,74 +376,109 @@ def get_today_predictions_matrix() -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame()
 
+    matches_df = (
+        df[
+            [
+                "id_partido",
+                "equipo_local",
+                "equipo_visitante",
+                "fecha_hora_partido",
+                "estado_partido",
+            ]
+        ]
+        .drop_duplicates()
+        .sort_values(by=["fecha_hora_partido", "id_partido"], ascending=True)
+        .reset_index(drop=True)
+    )
+
+    participants_df = (
+        df[["id_usuario", "participante"]]
+        .drop_duplicates()
+        .sort_values(by=["participante"], ascending=True)
+        .reset_index(drop=True)
+    )
+
+    columns = ["Participante"]
+
+    total_matches = len(matches_df)
+
+    for idx, match in matches_df.iterrows():
+        fecha_partido = pd.to_datetime(match["fecha_hora_partido"])
+        hora_partido = fecha_partido.strftime("%H:%M")
+
+        partido_header = (
+            f"{match['equipo_local']}-{match['equipo_visitante']} - "
+            f"{hora_partido} - {match['estado_partido']}"
+        )
+
+        columns.extend([
+            partido_header,
+            "Marcador Partido",
+            "puntos obtenidos",
+        ])
+
+        if idx < total_matches - 1:
+            columns.append(" " * (idx + 1))
+
     rows = []
 
-    for (id_usuario, participante), group in df.groupby(
-        ["id_usuario", "participante"],
-        dropna=False
-    ):
-        row = {
-            "Participante": participante,
-        }
+    for _, participant in participants_df.iterrows():
+        id_usuario = int(participant["id_usuario"])
+        participante = participant["participante"]
 
-        matches = group.sort_values(
-            by=["fecha_hora_partido", "id_partido"],
-            ascending=True,
-        ).reset_index(drop=True)
+        user_rows = df[df["id_usuario"] == id_usuario].copy()
 
-        for index, match in matches.iterrows():
-            equipo_local = str(match["equipo_local"])
-            equipo_visitante = str(match["equipo_visitante"])
-            estado = str(match["estado_partido"])
+        row_values = [participante]
 
-            fecha_partido = pd.to_datetime(match["fecha_hora_partido"])
-            hora_partido = fecha_partido.strftime("%H:%M")
+        for idx, match in matches_df.iterrows():
+            match_row = user_rows[user_rows["id_partido"] == match["id_partido"]]
 
-            partido_label = (
-                f"{equipo_local} - {equipo_visitante} "
-                f"({hora_partido}) - {estado}"
-            )
-
-            if pd.notna(match["goles_local_predicho"]) and pd.notna(match["goles_visitante_predicho"]):
-                prediccion = f"{int(match['goles_local_predicho'])}-{int(match['goles_visitante_predicho'])}"
+            if match_row.empty:
+                prediccion = ""
+                marcador_partido = match["estado_partido"]
+                puntos_obtenidos = ""
             else:
-                prediccion = "Sin registrar"
+                record = match_row.iloc[0]
+                estado = str(record["estado_partido"])
 
-            if (
-                estado in ("En juego", "Terminado")
-                and pd.notna(match["goles_local_real"])
-                and pd.notna(match["goles_visitante_real"])
-            ):
-                marcador_real = f"{int(match['goles_local_real'])}-{int(match['goles_visitante_real'])}"
-            else:
-                marcador_real = "Pendiente"
+                if pd.notna(record["goles_local_predicho"]) and pd.notna(record["goles_visitante_predicho"]):
+                    prediccion = f"{int(record['goles_local_predicho'])}-{int(record['goles_visitante_predicho'])}"
+                else:
+                    prediccion = ""
 
-            puntos = int(match["puntos"]) if pd.notna(match["puntos"]) else 0
+                if (
+                    estado in ("En juego", "Terminado")
+                    and pd.notna(record["goles_local_real"])
+                    and pd.notna(record["goles_visitante_real"])
+                ):
+                    marcador_partido = f"{int(record['goles_local_real'])}-{int(record['goles_visitante_real'])}"
+                    puntos_obtenidos = int(record["puntos"]) if pd.notna(record["puntos"]) else 0
+                else:
+                    marcador_partido = estado
+                    puntos_obtenidos = ""
 
-            row[f"{partido_label} | Predicción"] = prediccion
-            row[f"{partido_label} | Marcador Partido"] = marcador_real
-            row[f"{partido_label} | Puntos"] = puntos
+            row_values.extend([
+                prediccion,
+                marcador_partido,
+                puntos_obtenidos,
+            ])
 
-            if index < len(matches) - 1:
-                row[f"Separador {index + 1}"] = "────────"
+            if idx < total_matches - 1:
+                row_values.append("")
 
-        rows.append(row)
+        rows.append(row_values)
 
-    result = pd.DataFrame(rows)
+    result = pd.DataFrame(rows, columns=columns)
 
-    fixed_columns = ["Participante"]
-    dynamic_columns = [col for col in result.columns if col not in fixed_columns]
-
-    return result[fixed_columns + dynamic_columns]
+    return result
 
 
 # =========================================================
-# COMPATIBILIDAD: PREDICCIONES RECIENTES
+# COMPATIBILIDAD
 # =========================================================
 
 def get_recent_predictions() -> pd.DataFrame:
     """
-    Función conservada por compatibilidad.
-    Ahora retorna la matriz de partidos del día.
+    Conservada por compatibilidad.
     """
     return get_today_predictions_matrix()

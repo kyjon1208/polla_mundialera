@@ -43,7 +43,7 @@ with st.spinner("Actualizando predicciones por defecto y recalculando puntajes..
 
 def filter_leaderboard(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Aplica filtros a la tabla de posiciones.
+    Aplica filtros a la tabla general de posiciones.
     """
     if df is None or df.empty:
         return df
@@ -122,7 +122,7 @@ def filter_leaderboard(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # =========================================================
-# TABLA DE POSICIONES
+# TABLA GENERAL DE POSICIONES
 # =========================================================
 
 st.subheader("Posiciones generales")
@@ -144,7 +144,7 @@ else:
 
 
 # =========================================================
-# PREDICCIONES DE PARTIDOS DEL DÍA
+# PREDICCIONES DE LOS PARTIDOS DEL DÍA
 # =========================================================
 
 st.divider()
@@ -158,8 +158,8 @@ if today_predictions_matrix is None or today_predictions_matrix.empty:
 else:
     st.caption(
         "Cada fila corresponde a un participante. "
-        "Por cada partido del día se muestra la predicción, el marcador real si el partido está en juego o terminado, "
-        "y los puntos obtenidos. Las columnas con guiones separan visualmente cada partido."
+        "En cada bloque se muestra la predicción del usuario, el estado o marcador real del partido, "
+        "y los puntos obtenidos."
     )
 
     st.dataframe(
