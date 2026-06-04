@@ -5,6 +5,7 @@ import streamlit as st
 from src.auth import require_login
 from src.navigation import render_sidebar_navigation
 from src.predictions import (
+    delete_admin_predictions,
     ensure_default_predictions_for_all_participants,
     get_available_matches,
     lock_expired_predictions,
@@ -27,6 +28,10 @@ st.title("📝 Predicciones")
 st.caption("Registra tus marcadores. Una vez confirmados, no podrán modificarse.")
 
 
+# =========================================================
+# BLOQUEO PARA ADMIN
+# =========================================================
+
 if user.get("rol") != "participante":
     st.info("El administrador puede visualizar el sistema, pero no participa en la polla.")
     st.stop()
@@ -36,6 +41,7 @@ if user.get("rol") != "participante":
 # ACTUALIZAR BLOQUEOS Y 0-0
 # =========================================================
 
+delete_admin_predictions()
 lock_expired_predictions()
 ensure_default_predictions_for_all_participants()
 
