@@ -5,11 +5,12 @@ import streamlit as st
 from src.auth import login
 from src.db import init_sqlite_schema
 from src.navigation import render_sidebar_navigation
+from src.predictions import ensure_default_predictions_for_all_participants
 
 
 st.set_page_config(
-    page_title="Polla Mundialista",
-    page_icon="🐔",
+    page_title="Polla Mundialera",
+    page_icon="⚽",
     layout="wide"
 )
 
@@ -17,7 +18,7 @@ init_sqlite_schema()
 
 
 def render_login():
-    st.title("🐔 Polla Mundialista 2026 ⚽")
+    st.title("⚽ Polla Mundialera 2026")
     st.caption("Ingreso al sistema de predicciones del Mundial 2026.")
 
     st.subheader("Iniciar sesión")
@@ -39,24 +40,34 @@ def render_home():
 
     render_sidebar_navigation()
 
-    st.title("🐔 Polla Mundialista 2026 ⚽")
-    st.caption("Polla Mundial 2026. 11 De Junio del 2026 al 19 de Julio del 2026")
-    st.caption("JUEGA RESPONSABLEMENTE. Las apuestas pueden generar adicción y afectar su salud emocional, familiar y financiera. Prohibida la participación de menores de edad. No apueste dinero que no pueda permitirse perder. El juego es entretenimiento, no una fuente de ingresos.")
-    #st.success(f"Sesión iniciada como {user['nombre']} ({user['rol']})")
+    st.title("⚽ Polla Mundialera 2026")
+    st.caption("MVP en Python + Streamlit para administrar predicciones, resultados y posiciones.")
 
-    st.info("Usa el menú lateral para ingresar a las opciones disponibles.")
+    st.success(f"Sesión iniciada como {user['nombre']} ({user['rol']})")
+
+    st.info("Usa el menú lateral para ingresar a las opciones disponibles según tu rol.")
 
     st.divider()
 
-    #if user["rol"] == "admin":
-    #    st.subheader("Panel de administrador")
-    #    st.write("Puedes consultar predicciones, posiciones, criterios de puntuación, resultados, pruebas y usuarios.")
-    #else:
-    #    st.subheader("Panel de participante")
-    #    st.write("Puedes registrar predicciones, consultar posiciones, criterios de puntuación y resultados.")
+    if user["rol"] == "admin":
+        st.subheader("Panel de administrador")
+        st.write(
+            "Puedes consultar predicciones, posiciones, criterios, resultados, "
+            "pantallas de prueba y administración de usuarios."
+        )
+    else:
+        st.subheader("Panel de participante")
+        st.write(
+            "Puedes registrar tus predicciones, consultar posiciones, revisar criterios "
+            "de puntuación y ver resultados del Mundial."
+        )
 
 
 if not st.session_state.get("authenticated"):
     render_login()
 else:
+    # Actualiza 0-0 para todos los participantes activos.
+    # No incluye admins.
+    ensure_default_predictions_for_all_participants()
+
     render_home()

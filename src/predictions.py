@@ -6,26 +6,26 @@ from src.db import execute, fetch_df
 
 
 # =========================================================
-# FUNCIONES AUXILIARES SQL
+# CONFIGURACIÓN DE ZONA HORARIA
 # =========================================================
 
-def _get_current_timestamp_sql() -> str:
-    """
-    Devuelve expresión SQL compatible con PostgreSQL.
-
-    En Supabase/PostgreSQL:
-    - CURRENT_TIMESTAMP obtiene la fecha y hora actual.
-    """
-    return "CURRENT_TIMESTAMP"
+APP_TIMEZONE = "America/Bogota"
 
 
-def _get_match_day_start_sql(column_name: str = "p.fecha_hora_partido") -> str:
+def now_colombia_sql() -> str:
     """
-    Devuelve la fecha del partido truncada a las 00:00 del mismo día.
+    Fecha/hora actual en hora Colombia para PostgreSQL/Supabase.
+    """
+    return f"(CURRENT_TIMESTAMP AT TIME ZONE '{APP_TIMEZONE}')"
+
+
+def match_day_start_sql(column_name: str = "p.fecha_hora_partido") -> str:
+    """
+    Retorna las 00:00 del día del partido.
 
     Ejemplo:
-    Partido: 2026-06-15 20:00:00
-    Resultado: 2026-06-15 00:00:00
+    fecha_hora_partido = 2026-06-15 20:00:00
+    resultado = 2026-06-15 00:00:00
     """
     return f"DATE_TRUNC('day', {column_name})"
 
@@ -40,12 +40,12 @@ def get_available_matches(id_usuario: int) -> pd.DataFrame:
 
     Reglas:
     - El partido se muestra si ya llegó la fecha de apertura.
-    - El cierre automático es a las 00:00 del día del partido.
+    - El cierre automático es a las 00:00 del día del partido en hora Colombia.
     - Si el usuario ya registró una predicción, no puede editarla.
     - Si no registró y ya cerró el tiempo, juega con 0-0 por defecto.
     """
 
-    sql = """
+    sql = f"""
         SELECT
             p.id_partido,
             p.fase,
@@ -59,7 +59,7 @@ def get_available_matches(id_usuario: int) -> pd.DataFrame:
 
             vp.fecha_apertura,
 
-            DATE_TRUNC('day', p.fecha_hora_partido) AS fecha_cierre_automatica,
+            {match_day_start_sql("p.fecha_hora_partido")} AS fecha_cierre_automatica,
 
             pr.id_prediccion,
             COALESCE(pr.goles_local_predicho, 0) AS goles_local_predicho,
@@ -72,10 +72,10 @@ def get_available_matches(id_usuario: int) -> pd.DataFrame:
             END AS ya_registro,
 
             CASE
-                WHEN CURRENT_TIMESTAMP < vp.fecha_apertura
+                WHEN {now_colombia_sql()} < vp.fecha_apertura
                     THEN 'No disponible'
 
-                WHEN CURRENT_TIMESTAMP >= DATE_TRUNC('day', p.fecha_hora_partido)
+                WHEN {now_colombia_sql()} >= {match_day_start_sql("p.fecha_hora_partido")}
                     THEN 'Cerrada'
 
                 WHEN pr.id_prediccion IS NOT NULL
@@ -85,8 +85,8 @@ def get_available_matches(id_usuario: int) -> pd.DataFrame:
             END AS estado_ventana,
 
             CASE
-                WHEN CURRENT_TIMESTAMP >= vp.fecha_apertura
-                 AND CURRENT_TIMESTAMP < DATE_TRUNC('day', p.fecha_hora_partido)
+                WHEN {now_colombia_sql()} >= vp.fecha_apertura
+                 AND {now_colombia_sql()} < {match_day_start_sql("p.fecha_hora_partido")}
                  AND pr.id_prediccion IS NULL
                     THEN 1
                 ELSE 0
@@ -103,7 +103,7 @@ def get_available_matches(id_usuario: int) -> pd.DataFrame:
             ON p.id_partido = pr.id_partido
            AND pr.id_usuario = :id_usuario
 
-        WHERE CURRENT_TIMESTAMP >= vp.fecha_apertura
+        WHERE {now_colombia_sql()} >= vp.fecha_apertura
 
         ORDER BY
             p.fecha_hora_partido ASC,
@@ -125,23 +125,23 @@ def can_create_prediction(id_usuario: int, id_partido: int) -> tuple[bool, str]:
 
     Reglas:
     - Debe estar dentro del tiempo permitido.
-    - El cierre es a las 00:00 del día del partido.
+    - El cierre es a las 00:00 del día del partido en hora Colombia.
     - Si ya existe predicción, no permite actualizar.
     """
 
-    sql = """
+    sql = f"""
         SELECT
             p.id_partido,
             p.fecha_hora_partido,
             vp.fecha_apertura,
-            DATE_TRUNC('day', p.fecha_hora_partido) AS fecha_cierre_automatica,
+            {match_day_start_sql("p.fecha_hora_partido")} AS fecha_cierre_automatica,
             pr.id_prediccion,
 
             CASE
-                WHEN CURRENT_TIMESTAMP < vp.fecha_apertura
+                WHEN {now_colombia_sql()} < vp.fecha_apertura
                     THEN 'La ventana de predicción aún no está abierta.'
 
-                WHEN CURRENT_TIMESTAMP >= DATE_TRUNC('day', p.fecha_hora_partido)
+                WHEN {now_colombia_sql()} >= {match_day_start_sql("p.fecha_hora_partido")}
                     THEN 'La predicción ya está cerrada. Solo se podía registrar hasta las 00:00 del día del partido.'
 
                 WHEN pr.id_prediccion IS NOT NULL
@@ -208,7 +208,7 @@ def save_prediction(
     if not puede_guardar:
         return False, mensaje
 
-    sql = """
+    sql = f"""
         INSERT INTO predicciones (
             id_usuario,
             id_partido,
@@ -223,8 +223,8 @@ def save_prediction(
             :id_partido,
             :goles_local_predicho,
             :goles_visitante_predicho,
-            CURRENT_TIMESTAMP,
-            CURRENT_TIMESTAMP,
+            {now_colombia_sql()},
+            {now_colombia_sql()},
             1
         )
     """
@@ -249,20 +249,18 @@ def save_prediction(
 
 
 # =========================================================
-# PREDICCIONES 0-0 POR DEFECTO
+# PREDICCIONES 0-0 POR DEFECTO PARA UN USUARIO
 # =========================================================
 
 def ensure_default_predictions(id_usuario: int) -> None:
     """
-    Crea predicciones 0-0 por defecto para partidos cuyo tiempo de predicción ya cerró
-    y en los cuales el usuario no registró marcador.
+    Crea predicciones 0-0 por defecto para un usuario específico
+    en partidos cuyo tiempo de predicción ya cerró.
 
-    Regla:
-    Si el partido es el 15 de junio, desde el 15 de junio a las 00:00
-    se crea 0-0 si no existe predicción.
+    Esta función se mantiene por compatibilidad.
     """
 
-    sql = """
+    sql = f"""
         INSERT INTO predicciones (
             id_usuario,
             id_partido,
@@ -277,13 +275,17 @@ def ensure_default_predictions(id_usuario: int) -> None:
             p.id_partido,
             0 AS goles_local_predicho,
             0 AS goles_visitante_predicho,
-            CURRENT_TIMESTAMP AS fecha_registro,
-            CURRENT_TIMESTAMP AS fecha_actualizacion,
+            {now_colombia_sql()} AS fecha_registro,
+            {now_colombia_sql()} AS fecha_actualizacion,
             1 AS bloqueada
         FROM partidos p
         INNER JOIN ventanas_prediccion vp
             ON p.id_partido = vp.id_partido
-        WHERE CURRENT_TIMESTAMP >= DATE_TRUNC('day', p.fecha_hora_partido)
+        INNER JOIN usuarios u
+            ON u.id_usuario = :id_usuario
+        WHERE u.rol = 'participante'
+          AND u.estado_activo = 1
+          AND {now_colombia_sql()} >= {match_day_start_sql("p.fecha_hora_partido")}
           AND NOT EXISTS (
                 SELECT 1
                 FROM predicciones pr
@@ -297,11 +299,71 @@ def ensure_default_predictions(id_usuario: int) -> None:
     })
 
 
+# =========================================================
+# PREDICCIONES 0-0 POR DEFECTO PARA TODOS LOS PARTICIPANTES
+# =========================================================
+
+def ensure_default_predictions_for_all_participants() -> None:
+    """
+    Crea predicciones 0-0 por defecto para todos los participantes activos
+    en partidos cuyo tiempo de predicción ya cerró.
+
+    Reglas:
+    - Solo usuarios con rol = 'participante'.
+    - Solo usuarios activos.
+    - No aplica para admin.
+    - Si ya existe predicción, no la modifica.
+    - El cierre se calcula a las 00:00 del día del partido en hora Colombia.
+    """
+
+    sql = f"""
+        INSERT INTO predicciones (
+            id_usuario,
+            id_partido,
+            goles_local_predicho,
+            goles_visitante_predicho,
+            fecha_registro,
+            fecha_actualizacion,
+            bloqueada
+        )
+        SELECT
+            u.id_usuario,
+            p.id_partido,
+            0 AS goles_local_predicho,
+            0 AS goles_visitante_predicho,
+            {now_colombia_sql()} AS fecha_registro,
+            {now_colombia_sql()} AS fecha_actualizacion,
+            1 AS bloqueada
+        FROM usuarios u
+        CROSS JOIN partidos p
+        INNER JOIN ventanas_prediccion vp
+            ON p.id_partido = vp.id_partido
+        WHERE u.rol = 'participante'
+          AND u.estado_activo = 1
+          AND {now_colombia_sql()} >= {match_day_start_sql("p.fecha_hora_partido")}
+          AND NOT EXISTS (
+                SELECT 1
+                FROM predicciones pr
+                WHERE pr.id_usuario = u.id_usuario
+                  AND pr.id_partido = p.id_partido
+          )
+    """
+
+    execute(sql)
+
+
 def create_default_predictions_for_closed_matches(id_usuario: int | None = None) -> None:
     """
     Alias de compatibilidad para páginas anteriores.
+
+    Si recibe id_usuario:
+    - Crea 0-0 solo para ese usuario, siempre que sea participante.
+
+    Si no recibe id_usuario:
+    - Crea 0-0 para todos los participantes activos.
     """
     if id_usuario is None:
+        ensure_default_predictions_for_all_participants()
         return
 
     ensure_default_predictions(id_usuario)
@@ -313,16 +375,17 @@ def create_default_predictions_for_closed_matches(id_usuario: int | None = None)
 
 def lock_expired_predictions() -> None:
     """
-    Bloquea predicciones cuando ya llegó la fecha del partido a las 00:00.
+    Bloquea predicciones cuando ya llegó la fecha del partido a las 00:00
+    en hora Colombia.
     """
 
-    sql = """
+    sql = f"""
         UPDATE predicciones
         SET bloqueada = 1
         WHERE id_partido IN (
             SELECT id_partido
             FROM partidos
-            WHERE CURRENT_TIMESTAMP >= DATE_TRUNC('day', fecha_hora_partido)
+            WHERE {now_colombia_sql()} >= {match_day_start_sql("fecha_hora_partido")}
         )
     """
 

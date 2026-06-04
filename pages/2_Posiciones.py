@@ -5,7 +5,7 @@ import streamlit as st
 
 from src.auth import require_login
 from src.navigation import render_sidebar_navigation
-from src.predictions import create_default_predictions_for_closed_matches
+from src.predictions import ensure_default_predictions_for_all_participants
 from src.leaderboard import (
     get_leaderboard,
     get_recent_predictions,
@@ -29,11 +29,14 @@ st.caption("Consulta la clasificación actual de los participantes de la Polla M
 
 
 # =========================================================
-# ACTUALIZAR PUNTAJES
+# ACTUALIZAR 0-0 Y PUNTAJES
 # =========================================================
 
 with st.spinner("Actualizando predicciones por defecto y recalculando puntajes..."):
-    create_default_predictions_for_closed_matches(user["id_usuario"])
+    # Crea 0-0 para todos los participantes activos, excluyendo admins.
+    ensure_default_predictions_for_all_participants()
+
+    # Recalcula la tabla de posiciones.
     recalculate_scores()
 
 
@@ -42,9 +45,6 @@ with st.spinner("Actualizando predicciones por defecto y recalculando puntajes..
 # =========================================================
 
 def filter_leaderboard(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Aplica filtros a la tabla de posiciones.
-    """
     if df is None or df.empty:
         return df
 
@@ -122,9 +122,6 @@ def filter_leaderboard(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def filter_recent_predictions(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Aplica filtros a la tabla de últimas predicciones/resultados.
-    """
     if df is None or df.empty:
         return df
 
