@@ -322,7 +322,14 @@ def logout_button() -> None:
 def require_login() -> None:
     """
     Obliga a que el usuario haya iniciado sesión.
+
+    Importante:
+    Antes de mostrar login, intenta restaurar sesión desde cookie.
+    Esto evita que al presionar F5 en páginas internas se cierre la sesión.
     """
+
+    restore_session_from_cookie()
+
     if not st.session_state.get("authenticated"):
         login_form()
         st.stop()
