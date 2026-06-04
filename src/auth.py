@@ -1,20 +1,23 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import bcrypt
+import extra_streamlit_components as stx
 import streamlit as st
 from cryptography.fernet import Fernet
 
 from src.db import execute, fetch_all, fetch_one
-from datetime import datetime, timedelta
-import extra_streamlit_components as stx
+
 
 KEY_PATH = "secret.key"
+COOKIE_NAME = "polla_mundialera_session"
+LOGGED_OUT_VALUE = "__LOGGED_OUT__"
 
 
 # =========================================================
-# ENCRIPTACIÓN / DESENCRIPTACIÓN DE CÓDIGOS
+# FERNET / LLAVE DE ENCRIPTACIÓN
 # =========================================================
 
 def load_fernet() -> Fernet:
@@ -45,11 +48,26 @@ def load_fernet() -> Fernet:
     return Fernet(key_file.read_bytes())
 
 
-COOKIE_NAME = "polla_mundialera_session"
-
+# =========================================================
+# COOKIE MANAGER
+# =========================================================
 
 def get_cookie_manager():
-    return stx.CookieManager(key="cookie_manager")
+    """
+    Retorna una sola instancia de CookieManager por ejecución.
+
+    Importante:
+    - No usar @st.cache_resource aquí.
+    - CookieManager internamente usa componentes de Streamlit.
+    - Guardarlo en st.session_state evita DuplicateElementKey.
+    """
+    if "_cookie_manager" not in st.session_state:
+        st.session_state["_cookie_manager"] = stx.CookieManager(
+            key="global_cookie_manager"
+        )
+
+    return st.session_state["_cookie_manager"]
+
 
 def create_session_token(user: dict) -> str:
     """
@@ -65,9 +83,12 @@ def create_session_token(user: dict) -> str:
 
 def decode_session_token(token: str) -> dict | None:
     """
-    Decodifica el token de sesión guardado en cookie.
+    Decodifica el token guardado en cookie.
     """
     try:
+        if not token or token == LOGGED_OUT_VALUE:
+            return None
+
         fernet = load_fernet()
         raw_token = fernet.decrypt(token.encode("utf-8")).decode("utf-8")
 
@@ -85,33 +106,45 @@ def decode_session_token(token: str) -> dict | None:
 
 def save_session_cookie(user: dict) -> None:
     """
-    Guarda cookie de sesión para que al hacer F5 no se pierda la sesión.
+    Guarda cookie de sesión para recuperar sesión después de F5.
     """
     cookie_manager = get_cookie_manager()
 
     token = create_session_token(user)
-
     expires_at = datetime.now() + timedelta(days=7)
 
     cookie_manager.set(
         COOKIE_NAME,
         token,
         expires_at=expires_at,
-        key="set_login_cookie",
+        key="set_login_session_cookie",
     )
-
 
 
 def clear_session_cookie() -> None:
     """
-    Borra cookie de sesión.
+    Cierra realmente la sesión persistente.
+
+    En vez de solo borrar la cookie, primero la reemplaza por un valor inválido.
+    Así, si el navegador aún no terminó de eliminarla y el usuario presiona F5,
+    restore_session_from_cookie() NO volverá a iniciar sesión automáticamente.
     """
     cookie_manager = get_cookie_manager()
 
     try:
+        cookie_manager.set(
+            COOKIE_NAME,
+            LOGGED_OUT_VALUE,
+            expires_at=datetime.now() + timedelta(days=7),
+            key="set_logged_out_session_cookie",
+        )
+    except Exception:
+        pass
+
+    try:
         cookie_manager.delete(
             COOKIE_NAME,
-            key=f"delete_{COOKIE_NAME}",
+            key="delete_login_session_cookie",
         )
     except Exception:
         pass
@@ -120,8 +153,12 @@ def clear_session_cookie() -> None:
 def restore_session_from_cookie() -> bool:
     """
     Restaura la sesión desde cookie si existe.
-    """
 
+    Importante:
+    - Si el usuario cerró sesión manualmente, no restaura.
+    - Si la cookie tiene LOGGED_OUT_VALUE, no restaura.
+    - Si la cookie es inválida, no restaura.
+    """
     if st.session_state.get("manual_logout"):
         return False
 
@@ -129,16 +166,17 @@ def restore_session_from_cookie() -> bool:
         return True
 
     cookie_manager = get_cookie_manager()
-
     token = cookie_manager.get(COOKIE_NAME)
 
     if not token:
         return False
 
+    if token == LOGGED_OUT_VALUE:
+        return False
+
     token_data = decode_session_token(token)
 
     if not token_data:
-        clear_session_cookie()
         return False
 
     user = fetch_one("""
@@ -174,6 +212,11 @@ def restore_session_from_cookie() -> bool:
 
     return True
 
+
+# =========================================================
+# ENCRIPTACIÓN / DESENCRIPTACIÓN DE CÓDIGOS
+# =========================================================
+
 def encrypt_code(codigo: str) -> str:
     """
     Encripta el código para que el admin pueda consultarlo después.
@@ -197,7 +240,7 @@ def decrypt_code(codigo_encriptado: str) -> str:
 def hash_code(codigo: str) -> str:
     """
     Genera hash bcrypt para el código.
-    Este hash se usa para validar el login.
+    Este hash se usa para validar login.
     """
     return bcrypt.hashpw(
         codigo.encode("utf-8"),
@@ -229,10 +272,6 @@ def validate_code_format(codigo: str) -> bool:
 def authenticate_user(usuario: str, codigo: str):
     """
     Autentica un usuario usando usuario + código de 4 dígitos.
-
-    Importante:
-    Esta función NO usa SQLite directo.
-    Usa fetch_one(), así funciona con SQLite o Supabase/PostgreSQL.
     """
     usuario = usuario.strip()
     codigo = codigo.strip()
@@ -277,6 +316,11 @@ def authenticate_user(usuario: str, codigo: str):
 def login(usuario: str, codigo: str) -> bool:
     """
     Inicia sesión con usuario + código.
+
+    Al iniciar sesión correctamente:
+    - Limpia bandera de logout manual.
+    - Guarda session_state.
+    - Guarda cookie persistente.
     """
     user = authenticate_user(usuario, codigo)
 
@@ -292,9 +336,15 @@ def login(usuario: str, codigo: str) -> bool:
 
     return True
 
+
 def logout() -> None:
     """
     Cierra sesión.
+
+    Importante:
+    - Borra/invalida cookie.
+    - Marca manual_logout para que no restaure sesión en el mismo ciclo.
+    - Limpia session_state.
     """
     clear_session_cookie()
 
@@ -302,6 +352,7 @@ def logout() -> None:
 
     st.session_state.pop("authenticated", None)
     st.session_state.pop("user", None)
+
 
 def login_form() -> None:
     """
@@ -322,19 +373,21 @@ def login_form() -> None:
 
 
 def logout_button() -> None:
+    """
+    Botón de cierre de sesión.
+    """
     if st.sidebar.button("Cerrar sesión"):
         logout()
         st.rerun()
+
 
 def require_login() -> None:
     """
     Obliga a que el usuario haya iniciado sesión.
 
-    Importante:
     Antes de mostrar login, intenta restaurar sesión desde cookie.
     Esto evita que al presionar F5 en páginas internas se cierre la sesión.
     """
-
     restore_session_from_cookie()
 
     if not st.session_state.get("authenticated"):
