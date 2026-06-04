@@ -101,26 +101,35 @@ def save_session_cookie(user: dict) -> None:
     )
 
 
+
 def clear_session_cookie() -> None:
     """
-    Borra la cookie de sesión.
+    Borra cookie de sesión.
     """
     cookie_manager = get_cookie_manager()
 
     try:
-        cookie_manager.delete(COOKIE_NAME, key="delete_login_cookie")
+        cookie_manager.delete(
+            COOKIE_NAME,
+            key=f"delete_{COOKIE_NAME}",
+        )
     except Exception:
         pass
 
 
 def restore_session_from_cookie() -> bool:
     """
-    Restaura sesión desde cookie si existe y si el usuario sigue activo.
+    Restaura la sesión desde cookie si existe.
     """
+
+    if st.session_state.get("manual_logout"):
+        return False
+
     if st.session_state.get("authenticated"):
         return True
 
     cookie_manager = get_cookie_manager()
+
     token = cookie_manager.get(COOKIE_NAME)
 
     if not token:
@@ -274,6 +283,8 @@ def login(usuario: str, codigo: str) -> bool:
     if not user:
         return False
 
+    st.session_state.pop("manual_logout", None)
+
     st.session_state["authenticated"] = True
     st.session_state["user"] = user
 
@@ -286,6 +297,8 @@ def logout() -> None:
     Cierra sesión.
     """
     clear_session_cookie()
+
+    st.session_state["manual_logout"] = True
 
     st.session_state.pop("authenticated", None)
     st.session_state.pop("user", None)
@@ -309,13 +322,9 @@ def login_form() -> None:
 
 
 def logout_button() -> None:
-    """
-    Botón de cierre de sesión.
-    """
     if st.sidebar.button("Cerrar sesión"):
         logout()
         st.rerun()
-
 
 def require_login() -> None:
     """
