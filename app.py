@@ -9,7 +9,7 @@ from src.predictions import ensure_default_predictions_for_all_participants
 
 
 st.set_page_config(
-    page_title="Polla Mundialera",
+    page_title="Polla Mundialista",
     page_icon="⚽",
     layout="wide"
 )
@@ -18,7 +18,7 @@ init_sqlite_schema()
 
 
 def render_login():
-    st.title("⚽ Polla Mundialera 2026")
+    st.title("🐓 Polla Mundiaista 2026 ⚽")
     st.caption("Ingreso al sistema de predicciones del Mundial 2026.")
 
     st.subheader("Iniciar sesión")
@@ -40,10 +40,10 @@ def render_home():
 
     render_sidebar_navigation()
 
-    st.title("⚽ Polla Mundialera 2026")
-    st.caption("MVP en Python + Streamlit para administrar predicciones, resultados y posiciones.")
+    st.title("🐓 Polla Mundiaista 2026 ⚽")
+    st.caption("JUEGA RESPONSABLEMENTE. Las apuestas pueden generar adicción y afectar su salud emocional, familiar y financiera. Prohibida la participación de menores de edad. No apueste dinero que no pueda permitirse perder. El juego es entretenimiento, no una fuente de ingresos.")
 
-    st.success(f"Sesión iniciada como {user['nombre']} ({user['rol']})")
+   # st.success(f"Sesión iniciada como {user['nombre']} ({user['rol']})")
 
     st.info("Usa el menú lateral para ingresar a las opciones disponibles según tu rol.")
 
