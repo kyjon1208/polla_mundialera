@@ -48,10 +48,8 @@ def load_fernet() -> Fernet:
 COOKIE_NAME = "polla_mundialera_session"
 
 
-@st.cache_resource
 def get_cookie_manager():
-    return stx.CookieManager()
-
+    return stx.CookieManager(key="cookie_manager")
 
 def create_session_token(user: dict) -> str:
     """
