@@ -314,16 +314,12 @@ def get_leaderboard() -> pd.DataFrame:
 def get_today_predictions_matrix() -> pd.DataFrame:
     """
     Retorna una matriz tipo:
-    Participante | Partido | Marcador Partido | puntos obtenidos | separador | ...
+    Participante | Partido - hora - estado | Marcador Partido | puntos obtenidos | separador | ...
 
-    - Una fila por participante.
-    - Solo muestra el nombre del participante.
-    - La columna del partido contiene la predicción del usuario.
-    - 'Marcador Partido' muestra:
-        * el marcador real si está En juego o Terminado
-        * o el estado si aún no comienza
-    - 'puntos obtenidos' muestra puntos solo si el partido está En juego o Terminado.
-    - Se agrega una columna vacía entre partidos para separar visualmente.
+    Importante:
+    Streamlit no permite nombres de columnas duplicados.
+    Por eso las columnas 'Marcador Partido' y 'puntos obtenidos' llevan el nombre
+    del partido como prefijo interno.
     """
 
     today_condition = now_colombia_condition_for_today("p.fecha_hora_partido")
@@ -398,28 +394,6 @@ def get_today_predictions_matrix() -> pd.DataFrame:
         .reset_index(drop=True)
     )
 
-    columns = ["Participante"]
-
-    total_matches = len(matches_df)
-
-    for idx, match in matches_df.iterrows():
-        fecha_partido = pd.to_datetime(match["fecha_hora_partido"])
-        hora_partido = fecha_partido.strftime("%H:%M")
-
-        partido_header = (
-            f"{match['equipo_local']}-{match['equipo_visitante']} - "
-            f"{hora_partido} - {match['estado_partido']}"
-        )
-
-        columns.extend([
-            partido_header,
-            "Marcador Partido",
-            "puntos obtenidos",
-        ])
-
-        if idx < total_matches - 1:
-            columns.append(" " * (idx + 1))
-
     rows = []
 
     for _, participant in participants_df.iterrows():
@@ -428,18 +402,36 @@ def get_today_predictions_matrix() -> pd.DataFrame:
 
         user_rows = df[df["id_usuario"] == id_usuario].copy()
 
-        row_values = [participante]
+        row = {
+            "Participante": participante,
+        }
+
+        total_matches = len(matches_df)
 
         for idx, match in matches_df.iterrows():
-            match_row = user_rows[user_rows["id_partido"] == match["id_partido"]]
+            id_partido = int(match["id_partido"])
+
+            equipo_local = str(match["equipo_local"])
+            equipo_visitante = str(match["equipo_visitante"])
+            estado_partido = str(match["estado_partido"])
+
+            fecha_partido = pd.to_datetime(match["fecha_hora_partido"])
+            hora_partido = fecha_partido.strftime("%H:%M")
+
+            partido_base = f"{equipo_local}-{equipo_visitante}"
+
+            columna_prediccion = f"{partido_base} - {hora_partido} - {estado_partido}"
+            columna_marcador = f"{partido_base} - Marcador Partido"
+            columna_puntos = f"{partido_base} - puntos obtenidos"
+
+            match_row = user_rows[user_rows["id_partido"] == id_partido]
 
             if match_row.empty:
                 prediccion = ""
-                marcador_partido = match["estado_partido"]
+                marcador_partido = estado_partido
                 puntos_obtenidos = ""
             else:
                 record = match_row.iloc[0]
-                estado = str(record["estado_partido"])
 
                 if pd.notna(record["goles_local_predicho"]) and pd.notna(record["goles_visitante_predicho"]):
                     prediccion = f"{int(record['goles_local_predicho'])}-{int(record['goles_visitante_predicho'])}"
@@ -447,31 +439,28 @@ def get_today_predictions_matrix() -> pd.DataFrame:
                     prediccion = ""
 
                 if (
-                    estado in ("En juego", "Terminado")
+                    estado_partido in ("En juego", "Terminado")
                     and pd.notna(record["goles_local_real"])
                     and pd.notna(record["goles_visitante_real"])
                 ):
                     marcador_partido = f"{int(record['goles_local_real'])}-{int(record['goles_visitante_real'])}"
                     puntos_obtenidos = int(record["puntos"]) if pd.notna(record["puntos"]) else 0
                 else:
-                    marcador_partido = estado
+                    marcador_partido = estado_partido
                     puntos_obtenidos = ""
 
-            row_values.extend([
-                prediccion,
-                marcador_partido,
-                puntos_obtenidos,
-            ])
+            row[columna_prediccion] = prediccion
+            row[columna_marcador] = marcador_partido
+            row[columna_puntos] = puntos_obtenidos
 
             if idx < total_matches - 1:
-                row_values.append("")
+                row[f"──────── {idx + 1}"] = ""
 
-        rows.append(row_values)
+        rows.append(row)
 
-    result = pd.DataFrame(rows, columns=columns)
+    result = pd.DataFrame(rows)
 
     return result
-
 
 # =========================================================
 # COMPATIBILIDAD
