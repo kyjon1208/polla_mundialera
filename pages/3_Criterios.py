@@ -1,39 +1,85 @@
 from __future__ import annotations
 
+import pandas as pd
 import streamlit as st
 
 from src.auth import require_login
+from src.db import fetch_df
 from src.navigation import render_sidebar_navigation
 
 
 require_login()
 render_sidebar_navigation()
-from src.db import fetch_df
-
-#st.set_page_config(page_title="Criterios", page_icon="📊", layout="wide")
 
 
-st.title("📊 Criterios de puntuación")
-criteria = fetch_df(
-    """
-    SELECT nombre_criterio, fase, puntos
-    FROM criterios_puntuacion
-    ORDER BY nombre_criterio, fase
-    """
-)
+st.title("📋 Criterios de puntuación")
+st.caption("Consulta los criterios usados para calcular los puntos de la Polla Mundialera.")
 
-if criteria.empty:
-    st.info("No hay criterios cargados. Ejecuta el script `02_insert_criterios.sql`.")
-else:
-    pivot = criteria.pivot_table(index="nombre_criterio", columns="fase", values="puntos", aggfunc="first").reset_index()
-    st.dataframe(pivot, use_container_width=True, hide_index=True)
 
-st.subheader("Criterios de desempate")
-st.markdown(
-    """
-1. Mayor cantidad de marcadores completos acertados.  
-2. Mayor cantidad de aciertos de ganador o empate.  
-3. Mayor cantidad de diferencias de goles directas acertadas.  
-4. Si continúa el empate, los premios se juntan y se reparten por igual.
-"""
+FASE_ORDER = [
+    "Fase de Grupos",
+    "Dieciseisavos",
+    "Octavos",
+    "Cuartos",
+    "Semifinal",
+    "Tercer Puesto",
+    "Final",
+]
+
+
+def get_criteria_df() -> pd.DataFrame:
+    return fetch_df("""
+        SELECT
+            nombre_criterio,
+            fase,
+            puntos
+        FROM criterios_puntuacion
+    """)
+
+
+def build_criteria_table(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    pivot = df.pivot_table(
+        index="nombre_criterio",
+        columns="fase",
+        values="puntos",
+        aggfunc="max",
+        fill_value=0,
+    )
+
+    for fase in FASE_ORDER:
+        if fase not in pivot.columns:
+            pivot[fase] = 0
+
+    pivot = pivot[FASE_ORDER]
+
+    pivot["max_puntos"] = pivot.max(axis=1)
+
+    pivot = pivot.sort_values(
+        by="max_puntos",
+        ascending=False,
+    )
+
+    pivot = pivot.drop(columns=["max_puntos"])
+
+    pivot = pivot.reset_index()
+
+    return pivot
+
+
+criteria_raw = get_criteria_df()
+
+if criteria_raw is None or criteria_raw.empty:
+    st.info("No hay criterios de puntuación registrados.")
+    st.stop()
+
+
+criteria_table = build_criteria_table(criteria_raw)
+
+st.dataframe(
+    criteria_table,
+    use_container_width=True,
+    hide_index=True,
 )

@@ -59,6 +59,12 @@ def initialize_prediction_state(
     goles_local: int,
     goles_visitante: int,
 ) -> None:
+    """
+    Inicializa el borrador solo si no existe en session_state.
+
+    Esto evita que al guardar un partido se borren los borradores
+    que el usuario ya había escrito en otros partidos.
+    """
     key_local = get_prediction_state_key(id_partido, "local")
     key_visitante = get_prediction_state_key(id_partido, "visitante")
 
@@ -67,6 +73,38 @@ def initialize_prediction_state(
 
     if key_visitante not in st.session_state:
         st.session_state[key_visitante] = int(goles_visitante)
+
+
+def clear_prediction_state_for_match(id_partido: int) -> None:
+    """
+    Limpia solo las llaves del partido confirmado.
+    No toca los borradores de otros partidos.
+    """
+    key_local = get_prediction_state_key(id_partido, "local")
+    key_visitante = get_prediction_state_key(id_partido, "visitante")
+
+    st.session_state.pop(key_local, None)
+    st.session_state.pop(key_visitante, None)
+
+
+def set_pending_confirmation(id_partido: int) -> None:
+    st.session_state["pending_prediction_confirm"] = id_partido
+
+
+def clear_pending_confirmation() -> None:
+    st.session_state.pop("pending_prediction_confirm", None)
+
+
+def get_pending_confirmation() -> int | None:
+    value = st.session_state.get("pending_prediction_confirm")
+
+    if value is None:
+        return None
+
+    try:
+        return int(value)
+    except Exception:
+        return None
 
 
 # =========================================================
@@ -90,6 +128,8 @@ st.info(
 # =========================================================
 # LISTADO DE PARTIDOS
 # =========================================================
+
+pending_confirmation = get_pending_confirmation()
 
 for _, match in matches.iterrows():
     id_partido = int(match["id_partido"])
@@ -168,23 +208,58 @@ for _, match in matches.iterrows():
 
             if ya_registro:
                 st.success("Predicción registrada. No se puede modificar.")
+
             elif estado_ventana == "Cerrada":
                 st.warning("La predicción está cerrada. Si no registraste marcador, aplica 0-0.")
+
             else:
-                if st.button(
-                    "Confirmar predicción",
-                    key=f"confirmar_guardado_{id_partido}",
-                    disabled=not puede_editar,
-                ):
-                    ok, mensaje = save_prediction(
-                        id_usuario=user["id_usuario"],
-                        id_partido=id_partido,
-                        goles_local_predicho=marcador_local,
-                        goles_visitante_predicho=marcador_visitante,
+                if pending_confirmation == id_partido:
+                    st.warning(
+                        "¿Está seguro que quiere confirmar? "
+                        "Una vez hecho no se pueden modificar los marcadores."
                     )
 
-                    if ok:
-                        st.success(mensaje)
+                    st.write(
+                        f"Vas a confirmar: **{equipo_local} {marcador_local} - "
+                        f"{marcador_visitante} {equipo_visitante}**"
+                    )
+
+                    col_yes, col_no = st.columns(2)
+
+                    with col_yes:
+                        if st.button(
+                            "Sí, confirmar",
+                            key=f"confirmar_definitivo_{id_partido}",
+                            type="primary",
+                        ):
+                            ok, mensaje = save_prediction(
+                                id_usuario=user["id_usuario"],
+                                id_partido=id_partido,
+                                goles_local_predicho=marcador_local,
+                                goles_visitante_predicho=marcador_visitante,
+                            )
+
+                            if ok:
+                                clear_pending_confirmation()
+                                clear_prediction_state_for_match(id_partido)
+                                st.success(mensaje)
+                                st.rerun()
+                            else:
+                                st.error(mensaje)
+
+                    with col_no:
+                        if st.button(
+                            "Cancelar",
+                            key=f"cancelar_confirmacion_{id_partido}",
+                        ):
+                            clear_pending_confirmation()
+                            st.rerun()
+
+                else:
+                    if st.button(
+                        "Confirmar predicción",
+                        key=f"abrir_confirmacion_{id_partido}",
+                        disabled=not puede_editar,
+                    ):
+                        set_pending_confirmation(id_partido)
                         st.rerun()
-                    else:
-                        st.error(mensaje)
