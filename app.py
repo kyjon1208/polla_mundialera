@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from src.auth import login
+from src.auth import login, restore_session_from_cookie
 from src.db import init_sqlite_schema
 from src.navigation import render_sidebar_navigation
 from src.predictions import ensure_default_predictions_for_all_participants
@@ -13,6 +13,8 @@ st.set_page_config(
     page_icon="⚽",
     layout="wide"
 )
+
+restore_session_from_cookie()
 
 init_sqlite_schema()
 

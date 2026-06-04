@@ -7,7 +7,8 @@ import streamlit as st
 from cryptography.fernet import Fernet
 
 from src.db import execute, fetch_all, fetch_one
-
+from datetime import datetime, timedelta
+import extra_streamlit_components as stx
 
 KEY_PATH = "secret.key"
 
@@ -43,6 +44,128 @@ def load_fernet() -> Fernet:
 
     return Fernet(key_file.read_bytes())
 
+
+COOKIE_NAME = "polla_mundialera_session"
+
+
+@st.cache_resource
+def get_cookie_manager():
+    return stx.CookieManager()
+
+
+def create_session_token(user: dict) -> str:
+    """
+    Crea un token cifrado con información mínima del usuario.
+    """
+    fernet = load_fernet()
+
+    raw_token = f"{user['id_usuario']}|{user['usuario']}|{user['rol']}"
+    encrypted = fernet.encrypt(raw_token.encode("utf-8")).decode("utf-8")
+
+    return encrypted
+
+
+def decode_session_token(token: str) -> dict | None:
+    """
+    Decodifica el token de sesión guardado en cookie.
+    """
+    try:
+        fernet = load_fernet()
+        raw_token = fernet.decrypt(token.encode("utf-8")).decode("utf-8")
+
+        id_usuario, usuario, rol = raw_token.split("|")
+
+        return {
+            "id_usuario": int(id_usuario),
+            "usuario": usuario,
+            "rol": rol,
+        }
+
+    except Exception:
+        return None
+
+
+def save_session_cookie(user: dict) -> None:
+    """
+    Guarda cookie de sesión para que al hacer F5 no se pierda la sesión.
+    """
+    cookie_manager = get_cookie_manager()
+
+    token = create_session_token(user)
+
+    expires_at = datetime.now() + timedelta(days=7)
+
+    cookie_manager.set(
+        COOKIE_NAME,
+        token,
+        expires_at=expires_at,
+        key="set_login_cookie",
+    )
+
+
+def clear_session_cookie() -> None:
+    """
+    Borra la cookie de sesión.
+    """
+    cookie_manager = get_cookie_manager()
+
+    try:
+        cookie_manager.delete(COOKIE_NAME, key="delete_login_cookie")
+    except Exception:
+        pass
+
+
+def restore_session_from_cookie() -> bool:
+    """
+    Restaura sesión desde cookie si existe y si el usuario sigue activo.
+    """
+    if st.session_state.get("authenticated"):
+        return True
+
+    cookie_manager = get_cookie_manager()
+    token = cookie_manager.get(COOKIE_NAME)
+
+    if not token:
+        return False
+
+    token_data = decode_session_token(token)
+
+    if not token_data:
+        clear_session_cookie()
+        return False
+
+    user = fetch_one("""
+        SELECT
+            id_usuario,
+            usuario,
+            nombre,
+            rol,
+            estado_activo
+        FROM usuarios
+        WHERE id_usuario = :id_usuario
+          AND usuario = :usuario
+    """, {
+        "id_usuario": token_data["id_usuario"],
+        "usuario": token_data["usuario"],
+    })
+
+    if not user:
+        clear_session_cookie()
+        return False
+
+    if int(user["estado_activo"]) != 1:
+        clear_session_cookie()
+        return False
+
+    st.session_state["authenticated"] = True
+    st.session_state["user"] = {
+        "id_usuario": user["id_usuario"],
+        "usuario": user["usuario"],
+        "nombre": user["nombre"],
+        "rol": user["rol"],
+    }
+
+    return True
 
 def encrypt_code(codigo: str) -> str:
     """
@@ -156,16 +279,18 @@ def login(usuario: str, codigo: str) -> bool:
     st.session_state["authenticated"] = True
     st.session_state["user"] = user
 
-    return True
+    save_session_cookie(user)
 
+    return True
 
 def logout() -> None:
     """
     Cierra sesión.
     """
+    clear_session_cookie()
+
     st.session_state.pop("authenticated", None)
     st.session_state.pop("user", None)
-
 
 def login_form() -> None:
     """

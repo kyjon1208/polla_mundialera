@@ -143,6 +143,7 @@ else:
     )
 
 
+
 # =========================================================
 # PREDICCIONES DE LOS PARTIDOS DEL DÍA
 # =========================================================
@@ -162,8 +163,29 @@ else:
         "y los puntos obtenidos."
     )
 
+    participantes = sorted(
+        today_predictions_matrix["Participante"]
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
+    )
+
+    participante_seleccionado = st.selectbox(
+        "Filtrar por participante",
+        options=["Todos"] + participantes,
+        key="filtro_participante_predicciones_hoy",
+    )
+
+    filtered_today_matrix = today_predictions_matrix.copy()
+
+    if participante_seleccionado != "Todos":
+        filtered_today_matrix = filtered_today_matrix[
+            filtered_today_matrix["Participante"].astype(str) == participante_seleccionado
+        ]
+
     st.dataframe(
-        today_predictions_matrix,
+        filtered_today_matrix,
         use_container_width=True,
         hide_index=True,
     )

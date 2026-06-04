@@ -43,11 +43,20 @@ def get_goal_difference(goals_home: int, goals_away: int) -> int:
 
 
 def get_criteria_points(nombre_criterio: str, fase: str) -> int:
+    """
+    Busca los puntos del criterio ignorando mayúsculas, minúsculas y espacios.
+
+    Esto evita errores cuando en BD hay textos como:
+    'Solo acierto de ganador '
+    y en código llega:
+    'Solo acierto de ganador'
+    """
+
     df = fetch_df("""
         SELECT puntos
         FROM criterios_puntuacion
-        WHERE nombre_criterio = :nombre_criterio
-          AND fase = :fase
+        WHERE LOWER(TRIM(nombre_criterio)) = LOWER(TRIM(:nombre_criterio))
+          AND LOWER(TRIM(fase)) = LOWER(TRIM(:fase))
         LIMIT 1
     """, {
         "nombre_criterio": nombre_criterio,
@@ -69,6 +78,18 @@ def calculate_match_score(
 ) -> dict:
     """
     Calcula el puntaje de una predicción según los criterios definidos.
+
+    Prioridad aplicada:
+    1. Marcador completo
+    2. Acierto de empate
+    3. Acierto de marcador inverso
+    4. Acierto ganador y diferencia directa
+    5. Acierto de ganador y medio marcador
+    6. Solo acierto de ganador
+    7. Medio marcador y diferencia inversa
+    8. Solo diferencia de goles directa
+    9. Solo diferencia de goles inversa
+    10. Solo medio marcador
     """
 
     real_home = int(real_home)
@@ -85,52 +106,67 @@ def calculate_match_score(
     real_abs_diff = abs(real_diff)
     pred_abs_diff = abs(pred_diff)
 
+    same_winner = real_winner == pred_winner
+    same_direct_diff = real_diff == pred_diff
+    same_inverse_diff = real_diff == -pred_diff and real_diff != 0
+
+    half_score = pred_home == real_home or pred_away == real_away
+
     marcador_completo = 0
     acierto_ganador_empate = 0
     diferencia_directa = 0
 
     criterio = "Sin puntos"
 
+    # 1. Marcador completo
     if pred_home == real_home and pred_away == real_away:
         criterio = "Marcador Completo"
         marcador_completo = 1
         acierto_ganador_empate = 1
         diferencia_directa = 1
 
+    # 2. Acierto de empate
     elif real_winner == "empate" and pred_winner == "empate":
         criterio = "Acierto de Empate"
         acierto_ganador_empate = 1
 
+    # 3. Marcador inverso exacto
     elif pred_home == real_away and pred_away == real_home:
         criterio = "Acierto de Marcador Inverso"
 
-    elif pred_winner == real_winner and real_winner != "empate" and pred_diff == real_diff:
+    # 4. Ganador + diferencia directa
+    elif same_winner and real_winner != "empate" and same_direct_diff:
         criterio = "Acierto ganador y diferencia directa"
         acierto_ganador_empate = 1
         diferencia_directa = 1
 
-    elif pred_winner == real_winner and real_winner != "empate" and (
-        pred_home == real_home or pred_away == real_away
-    ):
+    # 5. Ganador + medio marcador
+    elif same_winner and real_winner != "empate" and half_score:
         criterio = "Acierto de ganador y medio marcador"
         acierto_ganador_empate = 1
 
-    elif pred_winner == real_winner and real_winner != "empate":
+    # 6. Solo ganador
+    elif same_winner and real_winner != "empate":
         criterio = "Solo acierto de ganador"
         acierto_ganador_empate = 1
 
-    elif pred_diff == real_diff:
+    # 7. Medio marcador + diferencia inversa
+    # Debe ir antes de "Solo diferencia inversa" y antes de "Solo medio marcador"
+    elif half_score and same_inverse_diff:
+        criterio = "Medio marcador y diferencia inversa"
+
+    # 8. Solo diferencia directa
+    elif same_direct_diff:
         criterio = "Solo diferencia de goles directa"
         diferencia_directa = 1
 
-    elif pred_abs_diff == real_abs_diff:
+    # 9. Solo diferencia inversa
+    elif same_inverse_diff or pred_abs_diff == real_abs_diff:
         criterio = "Solo diferencia de goles inversa"
 
-    elif pred_home == real_home or pred_away == real_away:
+    # 10. Solo medio marcador
+    elif half_score:
         criterio = "Solo medio marcador"
-
-    elif (pred_home == real_away or pred_away == real_home) and pred_abs_diff == real_abs_diff:
-        criterio = "Medio marcador y diferencia inversa"
 
     puntos = get_criteria_points(criterio, fase)
 
