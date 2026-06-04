@@ -5,7 +5,7 @@ import streamlit as st
 from src.auth import require_login
 from src.navigation import render_sidebar_navigation
 from src.predictions import (
-    ensure_default_predictions,
+    ensure_default_predictions_for_all_participants,
     get_available_matches,
     lock_expired_predictions,
     save_prediction,
@@ -27,12 +27,17 @@ st.title("📝 Predicciones")
 st.caption("Registra tus marcadores. Una vez confirmados, no podrán modificarse.")
 
 
+if user.get("rol") != "participante":
+    st.info("El administrador puede visualizar el sistema, pero no participa en la polla.")
+    st.stop()
+
+
 # =========================================================
-# CIERRE AUTOMÁTICO / 0-0 POR DEFECTO
+# ACTUALIZAR BLOQUEOS Y 0-0
 # =========================================================
 
 lock_expired_predictions()
-ensure_default_predictions(user["id_usuario"])
+ensure_default_predictions_for_all_participants()
 
 
 # =========================================================
@@ -40,9 +45,6 @@ ensure_default_predictions(user["id_usuario"])
 # =========================================================
 
 def get_prediction_state_key(id_partido: int, side: str) -> str:
-    """
-    Guarda temporalmente el marcador en la sesión activa de Streamlit.
-    """
     return f"prediccion_{user['id_usuario']}_{id_partido}_{side}"
 
 
@@ -68,13 +70,13 @@ def initialize_prediction_state(
 matches = get_available_matches(user["id_usuario"])
 
 if matches is None or matches.empty:
-    st.info("No tienes partidos disponibles para predecir en este momento.")
+    st.info("No hay partidos con ambos equipos definidos para registrar predicciones.")
     st.stop()
 
 
 st.info(
-    "Puedes registrar cada predicción hasta las 00:00 del día del partido. "
-    "Una vez confirmada, no se puede modificar. "
+    "Todos los partidos con ambos equipos definidos están disponibles para predecir. "
+    "Cada partido se bloquea automáticamente a las 00:00 del día del partido, hora Colombia. "
     "Si no registras marcador antes del cierre, jugarás con 0-0 por defecto."
 )
 
@@ -94,7 +96,6 @@ for _, match in matches.iterrows():
 
     puede_editar = int(match["puede_editar"]) == 1
     ya_registro = int(match["ya_registro"]) == 1
-    bloqueada = int(match["bloqueada"]) == 1
     estado_ventana = match["estado_ventana"]
 
     initialize_prediction_state(
@@ -117,7 +118,6 @@ for _, match in matches.iterrows():
             st.write(f"**Fecha partido:** {match['fecha_hora_partido']}")
             st.write(f"**Estado partido:** {match['estado_partido']}")
             st.write(f"**Estado predicción:** {estado_ventana}")
-            st.write(f"**Apertura:** {match['fecha_apertura']}")
             st.write(f"**Cierre automático:** {match['fecha_cierre_automatica']}")
 
             if match["goles_local_real"] is not None and match["goles_visitante_real"] is not None:
@@ -162,10 +162,8 @@ for _, match in matches.iterrows():
 
             if ya_registro:
                 st.success("Predicción registrada. No se puede modificar.")
-            elif bloqueada or estado_ventana == "Cerrada":
+            elif estado_ventana == "Cerrada":
                 st.warning("La predicción está cerrada. Si no registraste marcador, aplica 0-0.")
-            elif estado_ventana == "No disponible":
-                st.info("Este partido aún no está disponible para predicción.")
             else:
                 if st.button(
                     "Confirmar predicción",

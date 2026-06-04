@@ -2,50 +2,47 @@ from __future__ import annotations
 
 import pandas as pd
 
-from src.db import execute, fetch_df
+from src.db import execute, fetch_df, get_db_mode
 
-
-# =========================================================
-# CONFIGURACIÓN DE ZONA HORARIA
-# =========================================================
 
 APP_TIMEZONE = "America/Bogota"
 
 
-def now_colombia_sql() -> str:
-    """
-    Fecha/hora actual en hora Colombia para PostgreSQL/Supabase.
+def is_postgres() -> bool:
+    return get_db_mode() == "postgres"
 
-    Se usa para que el cierre de predicciones sea según hora Colombia,
-    no según la hora UTC del servidor.
-    """
-    return f"(CURRENT_TIMESTAMP AT TIME ZONE '{APP_TIMEZONE}')"
+
+def now_colombia_sql() -> str:
+    if is_postgres():
+        return f"(CURRENT_TIMESTAMP AT TIME ZONE '{APP_TIMEZONE}')"
+
+    return "datetime('now', 'localtime')"
 
 
 def match_day_start_sql(column_name: str = "p.fecha_hora_partido") -> str:
-    """
-    Retorna las 00:00 del día del partido.
+    if is_postgres():
+        return f"DATE_TRUNC('day', {column_name})"
 
-    Ejemplo:
-    fecha_hora_partido = 2026-06-15 20:00:00
-    resultado = 2026-06-15 00:00:00
-    """
-    return f"DATE_TRUNC('day', {column_name})"
+    return f"datetime(date({column_name}))"
+
+
+def match_has_teams_sql() -> str:
+    return "p.id_equipo_local IS NOT NULL AND p.id_equipo_visitante IS NOT NULL"
 
 
 # =========================================================
-# CONSULTA DE PARTIDOS DISPONIBLES
+# PARTIDOS DISPONIBLES PARA PREDICCIÓN
 # =========================================================
 
 def get_available_matches(id_usuario: int) -> pd.DataFrame:
     """
-    Retorna los partidos visibles para predicción.
+    Muestra todos los partidos que ya tienen ambos equipos definidos.
 
     Reglas:
-    - El partido se muestra si ya llegó la fecha de apertura.
-    - El cierre automático es a las 00:00 del día del partido en hora Colombia.
-    - Si el usuario ya registró una predicción, no puede editarla.
-    - Si no registró y ya cerró el tiempo, juega con 0-0 por defecto.
+    - Se muestran desde ya.
+    - Se bloquean a las 00:00 del día del partido en hora Colombia.
+    - Si el usuario ya predijo, solo visualiza.
+    - Si cerró y no predijo, se muestra el 0-0 automático.
     """
 
     sql = f"""
@@ -61,6 +58,7 @@ def get_available_matches(id_usuario: int) -> pd.DataFrame:
             p.goles_visitante_real,
 
             vp.fecha_apertura,
+            vp.fecha_cierre,
 
             {match_day_start_sql("p.fecha_hora_partido")} AS fecha_cierre_automatica,
 
@@ -75,9 +73,6 @@ def get_available_matches(id_usuario: int) -> pd.DataFrame:
             END AS ya_registro,
 
             CASE
-                WHEN {now_colombia_sql()} < vp.fecha_apertura
-                    THEN 'No disponible'
-
                 WHEN {now_colombia_sql()} >= {match_day_start_sql("p.fecha_hora_partido")}
                     THEN 'Cerrada'
 
@@ -88,8 +83,7 @@ def get_available_matches(id_usuario: int) -> pd.DataFrame:
             END AS estado_ventana,
 
             CASE
-                WHEN {now_colombia_sql()} >= vp.fecha_apertura
-                 AND {now_colombia_sql()} < {match_day_start_sql("p.fecha_hora_partido")}
+                WHEN {now_colombia_sql()} < {match_day_start_sql("p.fecha_hora_partido")}
                  AND pr.id_prediccion IS NULL
                     THEN 1
                 ELSE 0
@@ -100,22 +94,20 @@ def get_available_matches(id_usuario: int) -> pd.DataFrame:
             ON p.id_equipo_local = el.id_equipo
         INNER JOIN equipos ev
             ON p.id_equipo_visitante = ev.id_equipo
-        INNER JOIN ventanas_prediccion vp
+        LEFT JOIN ventanas_prediccion vp
             ON p.id_partido = vp.id_partido
         LEFT JOIN predicciones pr
             ON p.id_partido = pr.id_partido
            AND pr.id_usuario = :id_usuario
 
-        WHERE {now_colombia_sql()} >= vp.fecha_apertura
+        WHERE {match_has_teams_sql()}
 
         ORDER BY
             p.fecha_hora_partido ASC,
             p.id_partido ASC
     """
 
-    return fetch_df(sql, {
-        "id_usuario": id_usuario
-    })
+    return fetch_df(sql, {"id_usuario": id_usuario})
 
 
 # =========================================================
@@ -124,25 +116,33 @@ def get_available_matches(id_usuario: int) -> pd.DataFrame:
 
 def can_create_prediction(id_usuario: int, id_partido: int) -> tuple[bool, str]:
     """
-    Valida si el usuario puede crear una predicción.
+    Valida si un usuario puede crear una predicción.
 
     Reglas:
-    - Debe estar dentro del tiempo permitido.
-    - El cierre es a las 00:00 del día del partido en hora Colombia.
-    - Si ya existe predicción, no permite actualizar.
+    - Solo participantes activos pueden predecir.
+    - El admin no juega.
+    - El partido debe tener ambos equipos definidos.
+    - No puede estar cerrado.
+    - No puede tener predicción previa.
     """
 
     sql = f"""
         SELECT
             p.id_partido,
             p.fecha_hora_partido,
-            vp.fecha_apertura,
-            {match_day_start_sql("p.fecha_hora_partido")} AS fecha_cierre_automatica,
+            u.rol,
+            u.estado_activo,
             pr.id_prediccion,
 
             CASE
-                WHEN {now_colombia_sql()} < vp.fecha_apertura
-                    THEN 'La ventana de predicción aún no está abierta.'
+                WHEN u.rol <> 'participante'
+                    THEN 'El administrador no participa en la polla.'
+
+                WHEN u.estado_activo <> 1
+                    THEN 'El usuario está inactivo.'
+
+                WHEN p.id_equipo_local IS NULL OR p.id_equipo_visitante IS NULL
+                    THEN 'El partido aún no tiene ambos equipos definidos.'
 
                 WHEN {now_colombia_sql()} >= {match_day_start_sql("p.fecha_hora_partido")}
                     THEN 'La predicción ya está cerrada. Solo se podía registrar hasta las 00:00 del día del partido.'
@@ -154,8 +154,8 @@ def can_create_prediction(id_usuario: int, id_partido: int) -> tuple[bool, str]:
             END AS validacion
 
         FROM partidos p
-        INNER JOIN ventanas_prediccion vp
-            ON p.id_partido = vp.id_partido
+        INNER JOIN usuarios u
+            ON u.id_usuario = :id_usuario
         LEFT JOIN predicciones pr
             ON p.id_partido = pr.id_partido
            AND pr.id_usuario = :id_usuario
@@ -188,15 +188,6 @@ def save_prediction(
     goles_local_predicho: int,
     goles_visitante_predicho: int,
 ) -> tuple[bool, str]:
-    """
-    Guarda la predicción del usuario.
-
-    Importante:
-    - Solo permite INSERT.
-    - No permite UPDATE.
-    - Una vez registrada, queda bloqueada.
-    """
-
     goles_local_predicho = int(goles_local_predicho)
     goles_visitante_predicho = int(goles_visitante_predicho)
 
@@ -252,18 +243,10 @@ def save_prediction(
 
 
 # =========================================================
-# PREDICCIONES 0-0 POR DEFECTO PARA UN USUARIO
+# 0-0 POR DEFECTO PARA UN PARTICIPANTE
 # =========================================================
 
 def ensure_default_predictions(id_usuario: int) -> None:
-    """
-    Crea predicciones 0-0 por defecto para un usuario específico
-    en partidos cuyo tiempo de predicción ya cerró.
-
-    Solo aplica si el usuario es participante activo.
-    No aplica para admin.
-    """
-
     sql = f"""
         INSERT INTO predicciones (
             id_usuario,
@@ -283,12 +266,11 @@ def ensure_default_predictions(id_usuario: int) -> None:
             {now_colombia_sql()} AS fecha_actualizacion,
             1 AS bloqueada
         FROM partidos p
-        INNER JOIN ventanas_prediccion vp
-            ON p.id_partido = vp.id_partido
         INNER JOIN usuarios u
             ON u.id_usuario = :id_usuario
         WHERE u.rol = 'participante'
           AND u.estado_activo = 1
+          AND {match_has_teams_sql()}
           AND {now_colombia_sql()} >= {match_day_start_sql("p.fecha_hora_partido")}
           AND NOT EXISTS (
                 SELECT 1
@@ -298,26 +280,21 @@ def ensure_default_predictions(id_usuario: int) -> None:
           )
     """
 
-    execute(sql, {
-        "id_usuario": id_usuario
-    })
+    execute(sql, {"id_usuario": id_usuario})
 
 
 # =========================================================
-# PREDICCIONES 0-0 POR DEFECTO PARA TODOS LOS PARTICIPANTES
+# 0-0 POR DEFECTO PARA TODOS LOS PARTICIPANTES
 # =========================================================
 
 def ensure_default_predictions_for_all_participants() -> None:
     """
-    Crea predicciones 0-0 por defecto para todos los participantes activos
-    en partidos cuyo tiempo de predicción ya cerró.
+    Crea 0-0 para todos los participantes activos cuando un partido ya cerró.
 
-    Reglas:
-    - Solo usuarios con rol = 'participante'.
-    - Solo usuarios activos.
-    - No aplica para admin.
-    - Si ya existe predicción, no la modifica.
-    - El cierre se calcula a las 00:00 del día del partido en hora Colombia.
+    - Solo participantes.
+    - Admin excluido.
+    - Solo partidos con ambos equipos definidos.
+    - No modifica predicciones existentes.
     """
 
     sql = f"""
@@ -340,10 +317,9 @@ def ensure_default_predictions_for_all_participants() -> None:
             1 AS bloqueada
         FROM usuarios u
         CROSS JOIN partidos p
-        INNER JOIN ventanas_prediccion vp
-            ON p.id_partido = vp.id_partido
         WHERE u.rol = 'participante'
           AND u.estado_activo = 1
+          AND {match_has_teams_sql()}
           AND {now_colombia_sql()} >= {match_day_start_sql("p.fecha_hora_partido")}
           AND NOT EXISTS (
                 SELECT 1
@@ -357,15 +333,6 @@ def ensure_default_predictions_for_all_participants() -> None:
 
 
 def create_default_predictions_for_closed_matches(id_usuario: int | None = None) -> None:
-    """
-    Alias de compatibilidad para páginas anteriores.
-
-    Si recibe id_usuario:
-    - Crea 0-0 solo para ese usuario, siempre que sea participante.
-
-    Si no recibe id_usuario:
-    - Crea 0-0 para todos los participantes activos.
-    """
     if id_usuario is None:
         ensure_default_predictions_for_all_participants()
         return
@@ -378,18 +345,14 @@ def create_default_predictions_for_closed_matches(id_usuario: int | None = None)
 # =========================================================
 
 def lock_expired_predictions() -> None:
-    """
-    Bloquea predicciones cuando ya llegó la fecha del partido a las 00:00
-    en hora Colombia.
-    """
-
     sql = f"""
         UPDATE predicciones
         SET bloqueada = 1
         WHERE id_partido IN (
             SELECT id_partido
-            FROM partidos
-            WHERE {now_colombia_sql()} >= {match_day_start_sql("fecha_hora_partido")}
+            FROM partidos p
+            WHERE {match_has_teams_sql()}
+              AND {now_colombia_sql()} >= {match_day_start_sql("p.fecha_hora_partido")}
         )
     """
 
@@ -401,10 +364,6 @@ def lock_expired_predictions() -> None:
 # =========================================================
 
 def get_user_predictions(id_usuario: int) -> pd.DataFrame:
-    """
-    Retorna todas las predicciones registradas por un usuario.
-    """
-
     sql = """
         SELECT
             pr.id_prediccion,
@@ -432,6 +391,4 @@ def get_user_predictions(id_usuario: int) -> pd.DataFrame:
         ORDER BY p.fecha_hora_partido ASC
     """
 
-    return fetch_df(sql, {
-        "id_usuario": id_usuario
-    })
+    return fetch_df(sql, {"id_usuario": id_usuario})
