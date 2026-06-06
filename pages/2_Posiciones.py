@@ -134,6 +134,17 @@ if leaderboard is None or leaderboard.empty:
 else:
     filtered_leaderboard = filter_leaderboard(leaderboard)
 
+    # Ocultar columnas internas que no deben mostrarse al usuario
+    columns_to_hide = [
+        "id_usuario",
+        "usuario",
+    ]
+
+    filtered_leaderboard = filtered_leaderboard.drop(
+        columns=[col for col in columns_to_hide if col in filtered_leaderboard.columns],
+        errors="ignore",
+    )
+
     st.write(f"Registros mostrados: **{len(filtered_leaderboard)}** de **{len(leaderboard)}**")
 
     st.dataframe(
@@ -141,7 +152,6 @@ else:
         use_container_width=True,
         hide_index=True,
     )
-
 
 
 # =========================================================
