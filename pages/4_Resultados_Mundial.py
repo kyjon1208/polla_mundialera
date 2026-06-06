@@ -18,11 +18,11 @@ from src.db import fetch_df
 st.title("🌎 Resultados y posiciones del Mundial")
 st.caption("Pantalla preparada para integrarse con una API de resultados en tiempo real.")
 
-client = FootballResultsClient()
-if client.is_configured():
-    st.success("API configurada. Puedes implementar sincronización automática en `src/api_results.py`.")
-else:
-    st.warning("API no configurada. Se muestran los partidos guardados en la base de datos.")
+#client = FootballResultsClient()
+#if client.is_configured():
+#    st.success("API configurada. Puedes implementar sincronización automática en `src/api_results.py`.")
+#else:
+#st.warning("API no configurada. Se muestran los partidos guardados en la base de datos.")
 
 matches = fetch_df(
     """

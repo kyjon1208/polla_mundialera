@@ -43,8 +43,17 @@ def render_home():
     render_sidebar_navigation()
 
     st.title("🐓 Polla Mundiaista 2026 ⚽")
-    st.caption("JUEGA RESPONSABLEMENTE. Las apuestas pueden generar adicción y afectar su salud emocional, familiar y financiera. Prohibida la participación de menores de edad. No apueste dinero que no pueda permitirse perder. El juego es entretenimiento, no una fuente de ingresos.")
+    st.info("""
+    **AVISO DE PARTICIPACIÓN RESPONSABLE**
 
+    La presente polla es una actividad estrictamente recreativa, social y sin ánimo de lucro, realizada entre familiares y/o amigos.
+
+    La participación es voluntaria e implica la aceptación de sus reglas y resultados, bajo el entendido de que todos los participantes actúan como organizadores en igualdad de condiciones, sin intermediación profesional ni finalidad comercial.
+
+    Los aportes tienen como único propósito la conformación del fondo común destinado a la premiación acordada de manera colectiva, sin que exista garantía de retorno o beneficio económico.
+
+    Esta actividad no constituye una apuesta profesional ni una operación de juego comercial. Se recomienda participar de manera responsable y moderada.
+    """)
    # st.success(f"Sesión iniciada como {user['nombre']} ({user['rol']})")
 
     st.info("Usa el menú lateral para ingresar a las opciones disponibles según tu rol.")
