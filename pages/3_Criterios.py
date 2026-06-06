@@ -12,9 +12,13 @@ require_login()
 render_sidebar_navigation()
 
 
-st.title("📋 Criterios de puntuación")
-st.caption("Consulta los criterios usados para calcular los puntos de la Polla Mundialera.")
+st.title("📋 Criterios, premios y condiciones")
+st.caption("Consulta los criterios de puntuación, premios, desempates y reglas generales de la Polla Mundialera.")
 
+
+# =========================================================
+# CONFIGURACIÓN
+# =========================================================
 
 FASE_ORDER = [
     "Fase de Grupos",
@@ -27,6 +31,10 @@ FASE_ORDER = [
 ]
 
 
+# =========================================================
+# CONSULTAS
+# =========================================================
+
 def get_criteria_df() -> pd.DataFrame:
     return fetch_df("""
         SELECT
@@ -38,6 +46,12 @@ def get_criteria_df() -> pd.DataFrame:
 
 
 def build_criteria_table(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Construye una tabla donde:
+    - Las filas son los criterios.
+    - Las columnas son las fases en orden lógico.
+    - Los criterios se ordenan de mayor a menor puntaje máximo.
+    """
     if df is None or df.empty:
         return pd.DataFrame()
 
@@ -66,20 +80,101 @@ def build_criteria_table(df: pd.DataFrame) -> pd.DataFrame:
 
     pivot = pivot.reset_index()
 
+    pivot = pivot.rename(columns={
+        "nombre_criterio": "Criterio"
+    })
+
     return pivot
 
+
+# =========================================================
+# PREMIOS
+# =========================================================
+
+st.subheader("🏅 Premios")
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    st.metric("Primero", "50.00%")
+
+with col2:
+    st.metric("Segundo", "30.00%")
+
+with col3:
+    st.metric("Tercero", "20.00%")
+
+
+# =========================================================
+# VALOR Y FECHAS DE PAGO
+# =========================================================
+
+st.divider()
+
+st.subheader("💰 Valor y fechas límite de pago")
+
+st.markdown("""
+**Valor de inscripción:** $65.000
+
+**Fecha límite de pago:**
+
+- **50%:** martes, junio 11 de 2026 — Iniciación 1ª fecha Fase de Grupos.
+- **50%:** domingo, junio 28 de 2026 — Iniciación Dieciseisavos de Final.
+""")
+
+
+# =========================================================
+# CONDICIONES DE DESEMPATE
+# =========================================================
+
+st.divider()
+
+st.subheader("⚖️ Condiciones de desempate")
+
+st.markdown("""
+En caso de empate en puntos, se aplicarán los siguientes criterios en orden:
+
+1. Mayor cantidad de **marcadores completos acertados**.
+2. Mayor cantidad de **aciertos de ganador o empate**.
+3. Mayor cantidad de **diferencias de goles directas acertadas**.
+4. Si el empate continúa, se juntan los premios correspondientes y se reparten por igual entre los empatados.
+""")
+
+
+# =========================================================
+# NOTAS
+# =========================================================
+
+st.divider()
+
+st.subheader("📝 Notas generales")
+
+st.markdown("""
+1. Se considera el marcador del partido **después del alargue y antes de los penaltis**.
+2. Los marcadores se pueden ingresar máximo hasta las **11:59 p.m. del día anterior al partido**.
+3. Cualquier inconveniente debe comunicarse al WhatsApp **3155638972**.
+4. Quien no ingrese los marcadores oportunamente, juega con el marcador **0 – 0**.
+5. Al finalizar los partidos, se podrán visualizar los puntos obtenidos en los partidos del día con la tabla de posiciones actualizada.
+""")
+
+
+# =========================================================
+# TABLA DE CRITERIOS
+# =========================================================
+
+st.divider()
+
+st.subheader("📊 Tabla de criterios de puntuación")
 
 criteria_raw = get_criteria_df()
 
 if criteria_raw is None or criteria_raw.empty:
     st.info("No hay criterios de puntuación registrados.")
-    st.stop()
+else:
+    criteria_table = build_criteria_table(criteria_raw)
 
-
-criteria_table = build_criteria_table(criteria_raw)
-
-st.dataframe(
-    criteria_table,
-    use_container_width=True,
-    hide_index=True,
-)
+    st.dataframe(
+        criteria_table,
+        use_container_width=True,
+        hide_index=True,
+    )

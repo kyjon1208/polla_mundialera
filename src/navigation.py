@@ -26,7 +26,7 @@ def render_sidebar_navigation():
     st.sidebar.page_link("app.py", label="Inicio", icon="🏠")
     st.sidebar.page_link("pages/1_Predicciones.py", label="Predicciones", icon="📝")
     st.sidebar.page_link("pages/2_Posiciones.py", label="Posiciones", icon="🏆")
-    st.sidebar.page_link("pages/3_Criterios.py", label="Criterios", icon="📊")
+    st.sidebar.page_link("pages/3_Criterios.py", label="Reglamento", icon="📊")
     st.sidebar.page_link("pages/4_Resultados_Mundial.py", label="Resultados Mundial", icon="🌎")
 
     if rol == "admin":
