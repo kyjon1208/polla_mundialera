@@ -32,9 +32,8 @@ st.caption("Consulta la clasificación actual de los participantes de la Polla M
 # ACTUALIZAR 0-0 Y PUNTAJES
 # =========================================================
 
-with st.spinner("Actualizando predicciones por defecto y recalculando puntajes..."):
+with st.spinner("Cargando posiciones..."):
     ensure_default_predictions_for_all_participants()
-    recalculate_scores()
 
 
 # =========================================================

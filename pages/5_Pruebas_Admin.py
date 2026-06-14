@@ -7,8 +7,8 @@ import streamlit as st
 
 from src.auth import create_user, require_admin
 from src.db import execute, fetch_df, fetch_one
+from src.leaderboard import recalculate_scores
 from src.navigation import render_sidebar_navigation
-
 
 require_admin()
 render_sidebar_navigation()
@@ -563,9 +563,13 @@ with tab_resultados:
                 goles_local_real=goles_local_value,
                 goles_visitante_real=goles_visitante_value,
             )
-
             if ok:
-                st.success(mensaje)
+                if estado in ("En juego", "Terminado"):
+                    recalculate_scores()
+                    st.success("Resultado actualizado y posiciones recalculadas correctamente.")
+                else:
+                    st.success(mensaje)
+
                 st.rerun()
             else:
                 st.error(mensaje)
