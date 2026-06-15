@@ -20,7 +20,7 @@ init_sqlite_schema()
 
 
 def render_login():
-    st.title("🐓 Polla Mundiaista 2026 ⚽")
+    st.title("🐓 Polla Mundialista 2026 ⚽")
     st.caption("Ingreso al sistema de predicciones del Mundial 2026.")
 
     st.subheader("Iniciar sesión")
@@ -42,7 +42,7 @@ def render_home():
 
     render_sidebar_navigation()
 
-    st.title("🐓 Polla Mundiaista 2026 ⚽")
+    st.title("🐓 Polla Mundialista 2026 ⚽")
     st.info("""
     **AVISO DE PARTICIPACIÓN RESPONSABLE**
 

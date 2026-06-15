@@ -1,101 +1,92 @@
 from __future__ import annotations
 
+from typing import Any
+
 import pandas as pd
 
-from src.db import execute, fetch_df, get_db_mode
+from src.db import execute, fetch_df, fetch_one, get_db_mode
 
 
 # =========================================================
-# CONFIGURACIÓN DE TIEMPO
+# UTILIDADES DE CÁLCULO
 # =========================================================
 
-APP_TIMEZONE = "America/Bogota"
-
-
-def is_postgres() -> bool:
-    return get_db_mode() == "postgres"
-
-
-def now_colombia_condition_for_today(column_name: str = "p.fecha_hora_partido") -> str:
-    """
-    Condición SQL para filtrar partidos del día actual en hora Colombia.
-    """
-    if is_postgres():
-        return f"DATE({column_name}) = DATE(CURRENT_TIMESTAMP AT TIME ZONE '{APP_TIMEZONE}')"
-
-    return f"date({column_name}) = date('now', 'localtime')"
-
-
-# =========================================================
-# UTILIDADES DE PUNTAJE
-# =========================================================
-
-def get_winner(goals_home: int, goals_away: int) -> str:
-    if goals_home > goals_away:
+def get_winner(home_goals: int, away_goals: int) -> str:
+    if home_goals > away_goals:
         return "local"
-    if goals_home < goals_away:
+
+    if away_goals > home_goals:
         return "visitante"
+
     return "empate"
 
 
-def get_goal_difference(goals_home: int, goals_away: int) -> int:
-    return goals_home - goals_away
+def get_goal_difference(home_goals: int, away_goals: int) -> int:
+    return home_goals - away_goals
 
 
-def get_criteria_points(nombre_criterio: str, fase: str) -> int:
+def normalize_text(value: Any) -> str:
+    if value is None:
+        return ""
+
+    return str(value).strip().lower()
+
+
+def get_criteria_points_map() -> dict[tuple[str, str], int]:
     """
-    Busca los puntos del criterio ignorando mayúsculas, minúsculas y espacios.
-
-    Esto evita errores cuando en BD hay textos como:
-    'Solo acierto de ganador '
-    y en código llega:
-    'Solo acierto de ganador'
+    Trae todos los criterios una sola vez y los deja en memoria.
+    Esto evita hacer consultas repetidas por cada predicción.
     """
 
-    df = fetch_df("""
-        SELECT puntos
+    criteria_df = fetch_df("""
+        SELECT
+            nombre_criterio,
+            fase,
+            puntos
         FROM criterios_puntuacion
-        WHERE LOWER(TRIM(nombre_criterio)) = LOWER(TRIM(:nombre_criterio))
-          AND LOWER(TRIM(fase)) = LOWER(TRIM(:fase))
-        LIMIT 1
-    """, {
-        "nombre_criterio": nombre_criterio,
-        "fase": fase,
-    })
+    """)
 
-    if df is None or df.empty:
-        return 0
+    points_map: dict[tuple[str, str], int] = {}
 
-    return int(df.iloc[0]["puntos"])
+    if criteria_df.empty:
+        return points_map
+
+    for _, row in criteria_df.iterrows():
+        criterion_name = normalize_text(row["nombre_criterio"])
+        phase = normalize_text(row["fase"])
+        points = int(row["puntos"]) if pd.notna(row["puntos"]) else 0
+
+        points_map[(criterion_name, phase)] = points
+
+    return points_map
 
 
-def calculate_match_score(
-    fase: str,
+def get_criteria_points_from_map(
+    points_map: dict[tuple[str, str], int],
+    criterion_name: str,
+    phase: str,
+) -> int:
+    return points_map.get(
+        (
+            normalize_text(criterion_name),
+            normalize_text(phase),
+        ),
+        0,
+    )
+
+
+def calculate_match_score_fast(
+    phase: str,
     real_home: int,
     real_away: int,
     pred_home: int,
     pred_away: int,
-) -> dict:
+    points_map: dict[tuple[str, str], int],
+) -> tuple[int, str]:
     """
-    Calcula el puntaje de una predicción según los criterios definidos.
-
-    Prioridad aplicada:
-    1. Marcador completo
-    2. Acierto de empate
-    3. Acierto de marcador inverso
-    4. Acierto ganador y diferencia directa
-    5. Acierto de ganador y medio marcador
-    6. Solo acierto de ganador
-    7. Medio marcador y diferencia inversa
-    8. Solo diferencia de goles directa
-    9. Solo diferencia de goles inversa
-    10. Solo medio marcador
+    Calcula el puntaje de una predicción sin consultar la BD.
+    Usa el mapa de criterios ya cargado en memoria.
     """
-
-    real_home = int(real_home)
-    real_away = int(real_away)
-    pred_home = int(pred_home)
-    pred_away = int(pred_away)
 
     real_winner = get_winner(real_home, real_away)
     pred_winner = get_winner(pred_home, pred_away)
@@ -103,193 +94,212 @@ def calculate_match_score(
     real_diff = get_goal_difference(real_home, real_away)
     pred_diff = get_goal_difference(pred_home, pred_away)
 
-    real_abs_diff = abs(real_diff)
-    pred_abs_diff = abs(pred_diff)
-
-    same_winner = real_winner == pred_winner
-    same_direct_diff = real_diff == pred_diff
-    same_inverse_diff = real_diff == -pred_diff and real_diff != 0
-
-    half_score = pred_home == real_home or pred_away == real_away
-
-    marcador_completo = 0
-    acierto_ganador_empate = 0
-    diferencia_directa = 0
-
-    criterio = "Sin puntos"
+    exact_home = real_home == pred_home
+    exact_away = real_away == pred_away
+    half_score = exact_home or exact_away
 
     # 1. Marcador completo
-    if pred_home == real_home and pred_away == real_away:
-        criterio = "Marcador Completo"
-        marcador_completo = 1
-        acierto_ganador_empate = 1
-        diferencia_directa = 1
+    if real_home == pred_home and real_away == pred_away:
+        criterion = "Marcador Completo"
+        return get_criteria_points_from_map(points_map, criterion, phase), criterion
 
     # 2. Acierto de empate
-    elif real_winner == "empate" and pred_winner == "empate":
-        criterio = "Acierto de Empate"
-        acierto_ganador_empate = 1
+    if real_winner == "empate" and pred_winner == "empate":
+        criterion = "Acierto de Empate"
+        return get_criteria_points_from_map(points_map, criterion, phase), criterion
 
-    # 3. Marcador inverso exacto
-    elif pred_home == real_away and pred_away == real_home:
-        criterio = "Acierto de Marcador Inverso"
+    # 3. Marcador inverso
+    if real_home == pred_away and real_away == pred_home:
+        criterion = "Acierto de Marcador Inverso"
+        return get_criteria_points_from_map(points_map, criterion, phase), criterion
 
     # 4. Ganador + diferencia directa
-    elif same_winner and real_winner != "empate" and same_direct_diff:
-        criterio = "Acierto ganador y diferencia directa"
-        acierto_ganador_empate = 1
-        diferencia_directa = 1
+    if real_winner == pred_winner and real_diff == pred_diff:
+        criterion = "Acierto ganador y diferencia directa"
+        return get_criteria_points_from_map(points_map, criterion, phase), criterion
 
     # 5. Ganador + medio marcador
-    elif same_winner and real_winner != "empate" and half_score:
-        criterio = "Acierto de ganador y medio marcador"
-        acierto_ganador_empate = 1
+    if real_winner == pred_winner and half_score:
+        criterion = "Acierto de ganador y medio marcador"
+        return get_criteria_points_from_map(points_map, criterion, phase), criterion
 
     # 6. Solo ganador
-    elif same_winner and real_winner != "empate":
-        criterio = "Solo acierto de ganador"
-        acierto_ganador_empate = 1
+    if real_winner == pred_winner:
+        criterion = "Solo acierto de ganador"
+        return get_criteria_points_from_map(points_map, criterion, phase), criterion
 
     # 7. Medio marcador + diferencia inversa
-    # Debe ir antes de "Solo diferencia inversa" y antes de "Solo medio marcador"
-    elif half_score and same_inverse_diff:
-        criterio = "Medio marcador y diferencia inversa"
+    if half_score and real_diff == -pred_diff:
+        criterion = "Medio marcador y diferencia inversa"
+        return get_criteria_points_from_map(points_map, criterion, phase), criterion
 
     # 8. Solo diferencia directa
-    elif same_direct_diff:
-        criterio = "Solo diferencia de goles directa"
-        diferencia_directa = 1
+    if real_diff == pred_diff:
+        criterion = "Solo diferencia de goles directa"
+        return get_criteria_points_from_map(points_map, criterion, phase), criterion
 
     # 9. Solo diferencia inversa
-    elif same_inverse_diff or pred_abs_diff == real_abs_diff:
-        criterio = "Solo diferencia de goles inversa"
+    if real_diff == -pred_diff:
+        criterion = "Solo diferencia de goles inversa"
+        return get_criteria_points_from_map(points_map, criterion, phase), criterion
 
     # 10. Solo medio marcador
-    elif half_score:
-        criterio = "Solo medio marcador"
+    if half_score:
+        criterion = "Solo medio marcador"
+        return get_criteria_points_from_map(points_map, criterion, phase), criterion
 
-    puntos = get_criteria_points(criterio, fase)
-
-    return {
-        "criterio_aplicado": criterio,
-        "puntos": puntos,
-        "marcador_completo": marcador_completo,
-        "acierto_ganador_empate": acierto_ganador_empate,
-        "diferencia_directa": diferencia_directa,
-    }
+    return 0, "Sin puntos"
 
 
 # =========================================================
-# RECALCULAR PUNTAJES
+# RECÁLCULO OPTIMIZADO
 # =========================================================
 
 def recalculate_scores() -> None:
     """
-    Recalcula los puntajes de partidos que estén En juego o Terminados.
-    Solo calcula para usuarios participantes.
+    Recalcula puntajes de forma optimizada.
+
+    Antes:
+    - Muchas consultas dentro de ciclos.
+    - Muy lento en Supabase/Streamlit Cloud.
+
+    Ahora:
+    - 1 consulta para criterios.
+    - 1 consulta para predicciones puntuables.
+    - Cálculo en memoria.
+    - 1 delete por partidos involucrados.
+    - Inserts en bloques.
     """
 
-    predictions = fetch_df("""
+    points_map = get_criteria_points_map()
+
+    if not points_map:
+        return
+
+    predictions_df = fetch_df("""
         SELECT
+            pr.id_prediccion,
             pr.id_usuario,
             pr.id_partido,
             pr.goles_local_predicho,
             pr.goles_visitante_predicho,
-
             p.fase,
-            p.estado_partido,
             p.goles_local_real,
-            p.goles_visitante_real,
-
-            u.rol,
-            u.estado_activo
+            p.goles_visitante_real
         FROM predicciones pr
         INNER JOIN partidos p
             ON pr.id_partido = p.id_partido
         INNER JOIN usuarios u
             ON pr.id_usuario = u.id_usuario
-        WHERE p.estado_partido IN ('En juego', 'Terminado')
+        WHERE LOWER(TRIM(u.rol)) = 'participante'
+          AND u.estado_activo = 1
+          AND p.estado_partido IN ('En juego', 'Terminado')
           AND p.goles_local_real IS NOT NULL
           AND p.goles_visitante_real IS NOT NULL
-          AND LOWER(TRIM(u.rol)) = 'participante'
-          AND u.estado_activo = 1
+          AND pr.goles_local_predicho IS NOT NULL
+          AND pr.goles_visitante_predicho IS NOT NULL
     """)
 
-    if predictions is None or predictions.empty:
+    if predictions_df.empty:
         return
 
-    for _, row in predictions.iterrows():
-        score = calculate_match_score(
-            fase=row["fase"],
-            real_home=int(row["goles_local_real"]),
-            real_away=int(row["goles_visitante_real"]),
-            pred_home=int(row["goles_local_predicho"]),
-            pred_away=int(row["goles_visitante_predicho"]),
+    score_rows: list[dict[str, Any]] = []
+
+    for _, row in predictions_df.iterrows():
+        phase = str(row["fase"]).strip()
+
+        real_home = int(row["goles_local_real"])
+        real_away = int(row["goles_visitante_real"])
+        pred_home = int(row["goles_local_predicho"])
+        pred_away = int(row["goles_visitante_predicho"])
+
+        points, criterion = calculate_match_score_fast(
+            phase=phase,
+            real_home=real_home,
+            real_away=real_away,
+            pred_home=pred_home,
+            pred_away=pred_away,
+            points_map=points_map,
         )
 
-        existing = fetch_df("""
-            SELECT id_puntaje
-            FROM puntajes_partido
-            WHERE id_usuario = :id_usuario
-              AND id_partido = :id_partido
-            LIMIT 1
-        """, {
+        score_rows.append({
             "id_usuario": int(row["id_usuario"]),
             "id_partido": int(row["id_partido"]),
+            "puntos_obtenidos": int(points),
+            "criterio_aplicado": criterion,
         })
 
-        if existing is not None and not existing.empty:
-            execute("""
-                UPDATE puntajes_partido
-                SET
-                    criterio_aplicado = :criterio_aplicado,
-                    puntos = :puntos,
-                    marcador_completo = :marcador_completo,
-                    acierto_ganador_empate = :acierto_ganador_empate,
-                    diferencia_directa = :diferencia_directa,
-                    fecha_calculo = CURRENT_TIMESTAMP
-                WHERE id_usuario = :id_usuario
-                  AND id_partido = :id_partido
-            """, {
-                "criterio_aplicado": score["criterio_aplicado"],
-                "puntos": score["puntos"],
-                "marcador_completo": score["marcador_completo"],
-                "acierto_ganador_empate": score["acierto_ganador_empate"],
-                "diferencia_directa": score["diferencia_directa"],
-                "id_usuario": int(row["id_usuario"]),
-                "id_partido": int(row["id_partido"]),
-            })
-        else:
-            execute("""
-                INSERT INTO puntajes_partido (
-                    id_usuario,
-                    id_partido,
-                    criterio_aplicado,
-                    puntos,
-                    marcador_completo,
-                    acierto_ganador_empate,
-                    diferencia_directa,
-                    fecha_calculo
+    if not score_rows:
+        return
+
+    match_ids = sorted({row["id_partido"] for row in score_rows})
+
+    delete_scores_for_matches(match_ids)
+    bulk_insert_scores(score_rows)
+
+
+def delete_scores_for_matches(match_ids: list[int]) -> None:
+    """
+    Borra puntajes previos solo de los partidos que se van a recalcular.
+    Esto evita recalcular o tocar partidos innecesarios.
+    """
+
+    if not match_ids:
+        return
+
+    placeholders = []
+    params: dict[str, Any] = {}
+
+    for index, match_id in enumerate(match_ids):
+        key = f"id_partido_{index}"
+        placeholders.append(f":{key}")
+        params[key] = match_id
+
+    execute(f"""
+        DELETE FROM puntajes_partido
+        WHERE id_partido IN ({", ".join(placeholders)})
+    """, params)
+
+
+def bulk_insert_scores(score_rows: list[dict[str, Any]], batch_size: int = 500) -> None:
+    """
+    Inserta puntajes en bloques.
+    Esto es mucho más rápido que insertar uno por uno.
+    """
+
+    if not score_rows:
+        return
+
+    for start in range(0, len(score_rows), batch_size):
+        batch = score_rows[start:start + batch_size]
+
+        values_sql = []
+        params: dict[str, Any] = {}
+
+        for index, row in enumerate(batch):
+            values_sql.append(f"""
+                (
+                    :id_usuario_{index},
+                    :id_partido_{index},
+                    :puntos_obtenidos_{index},
+                    :criterio_aplicado_{index}
                 )
-                VALUES (
-                    :id_usuario,
-                    :id_partido,
-                    :criterio_aplicado,
-                    :puntos,
-                    :marcador_completo,
-                    :acierto_ganador_empate,
-                    :diferencia_directa,
-                    CURRENT_TIMESTAMP
-                )
-            """, {
-                "id_usuario": int(row["id_usuario"]),
-                "id_partido": int(row["id_partido"]),
-                "criterio_aplicado": score["criterio_aplicado"],
-                "puntos": score["puntos"],
-                "marcador_completo": score["marcador_completo"],
-                "acierto_ganador_empate": score["acierto_ganador_empate"],
-                "diferencia_directa": score["diferencia_directa"],
-            })
+            """)
+
+            params[f"id_usuario_{index}"] = row["id_usuario"]
+            params[f"id_partido_{index}"] = row["id_partido"]
+            params[f"puntos_obtenidos_{index}"] = row["puntos_obtenidos"]
+            params[f"criterio_aplicado_{index}"] = row["criterio_aplicado"]
+
+        execute(f"""
+            INSERT INTO puntajes_partido (
+                id_usuario,
+                id_partido,
+                puntos_obtenidos,
+                criterio_aplicado
+            )
+            VALUES {", ".join(values_sql)}
+        """, params)
 
 
 # =========================================================
@@ -298,85 +308,133 @@ def recalculate_scores() -> None:
 
 def get_leaderboard() -> pd.DataFrame:
     """
-    Retorna la tabla general de posiciones.
+    Retorna tabla general de posiciones.
+    Usa los puntajes ya calculados en puntajes_partido.
     """
 
-    sql = """
+    leaderboard_df = fetch_df("""
         SELECT
             u.id_usuario,
             u.nombre,
             u.usuario,
+            COALESCE(SUM(pp.puntos_obtenidos), 0) AS puntos_totales,
 
-            COALESCE(SUM(pp.puntos), 0) AS puntos_totales,
-            COALESCE(SUM(pp.marcador_completo), 0) AS marcadores_completos,
-            COALESCE(SUM(pp.acierto_ganador_empate), 0) AS aciertos_ganador_empate,
-            COALESCE(SUM(pp.diferencia_directa), 0) AS diferencias_directas
+            COALESCE(SUM(CASE
+                WHEN pp.criterio_aplicado = 'Marcador Completo'
+                THEN 1 ELSE 0
+            END), 0) AS marcadores_completos,
+
+            COALESCE(SUM(CASE
+                WHEN pp.criterio_aplicado = 'Acierto de Empate'
+                THEN 1 ELSE 0
+            END), 0) AS aciertos_empate,
+
+            COALESCE(SUM(CASE
+                WHEN pp.criterio_aplicado = 'Acierto ganador y diferencia directa'
+                THEN 1 ELSE 0
+            END), 0) AS ganador_diferencia_directa,
+
+            COALESCE(SUM(CASE
+                WHEN pp.criterio_aplicado = 'Acierto de ganador y medio marcador'
+                THEN 1 ELSE 0
+            END), 0) AS ganador_medio_marcador,
+
+            COALESCE(SUM(CASE
+                WHEN pp.criterio_aplicado = 'Solo acierto de ganador'
+                THEN 1 ELSE 0
+            END), 0) AS solo_ganador,
+
+            COALESCE(SUM(CASE
+                WHEN pp.criterio_aplicado = 'Solo diferencia de goles directa'
+                THEN 1 ELSE 0
+            END), 0) AS diferencia_directa,
+
+            COALESCE(SUM(CASE
+                WHEN pp.criterio_aplicado = 'Solo diferencia de goles inversa'
+                THEN 1 ELSE 0
+            END), 0) AS diferencia_inversa,
+
+            COALESCE(SUM(CASE
+                WHEN pp.criterio_aplicado = 'Solo medio marcador'
+                THEN 1 ELSE 0
+            END), 0) AS solo_medio_marcador
 
         FROM usuarios u
         LEFT JOIN puntajes_partido pp
             ON u.id_usuario = pp.id_usuario
-
         WHERE LOWER(TRIM(u.rol)) = 'participante'
           AND u.estado_activo = 1
-
         GROUP BY
             u.id_usuario,
             u.nombre,
             u.usuario
-
         ORDER BY
             puntos_totales DESC,
             marcadores_completos DESC,
-            aciertos_ganador_empate DESC,
-            diferencias_directas DESC,
+            aciertos_empate DESC,
+            ganador_diferencia_directa DESC,
             u.nombre ASC
-    """
+    """)
 
-    df = fetch_df(sql)
+    if leaderboard_df.empty:
+        return leaderboard_df
 
-    if df is None or df.empty:
-        return pd.DataFrame()
+    leaderboard_df.insert(
+        0,
+        "posición",
+        range(1, len(leaderboard_df) + 1),
+    )
 
-    df = df.copy()
-    df.insert(0, "posición", range(1, len(df) + 1))
-
-    return df
+    return leaderboard_df
 
 
 # =========================================================
-# MATRIZ DE PREDICCIONES DEL DÍA
+# PREDICCIONES DE HOY
 # =========================================================
 
-def get_today_predictions_matrix() -> pd.DataFrame:
+def today_condition_sql(column_name: str = "p.fecha_hora_partido") -> str:
+    db_mode = get_db_mode()
+
+    if db_mode == "postgres":
+        return f"DATE({column_name}) = DATE(CURRENT_TIMESTAMP AT TIME ZONE 'America/Bogota')"
+
+    return f"date({column_name}) = date('now', 'localtime')"
+
+
+def get_today_predictions_matrix(participant_name: str | None = None) -> pd.DataFrame:
     """
-    Retorna una matriz tipo:
-    Participante | Partido - hora - estado | Marcador Partido | puntos obtenidos | separador | ...
+    Matriz de predicciones de los partidos de hoy.
 
-    Importante:
-    Streamlit no permite nombres de columnas duplicados.
-    Por eso las columnas 'Marcador Partido' y 'puntos obtenidos' llevan el nombre
-    del partido como prefijo interno.
+    Si participant_name viene con un nombre específico,
+    filtra desde SQL para que sea más rápido.
     """
 
-    today_condition = now_colombia_condition_for_today("p.fecha_hora_partido")
+    params: dict[str, Any] = {}
+    participant_filter = ""
 
-    sql = f"""
+    if participant_name and participant_name != "Todos":
+        participant_filter = "AND u.nombre = :participant_name"
+        params["participant_name"] = participant_name
+
+    df = fetch_df(f"""
         SELECT
             u.id_usuario,
             u.nombre AS participante,
-
             p.id_partido,
-            el.nombre AS equipo_local,
-            ev.nombre AS equipo_visitante,
             p.fecha_hora_partido,
             p.estado_partido,
-            p.goles_local_real,
-            p.goles_visitante_real,
+
+            el.nombre AS equipo_local,
+            ev.nombre AS equipo_visitante,
 
             pr.goles_local_predicho,
             pr.goles_visitante_predicho,
 
-            COALESCE(pp.puntos, 0) AS puntos
+            p.goles_local_real,
+            p.goles_visitante_real,
+
+            pp.puntos_obtenidos,
+            pp.criterio_aplicado
 
         FROM usuarios u
         CROSS JOIN partidos p
@@ -385,125 +443,137 @@ def get_today_predictions_matrix() -> pd.DataFrame:
         INNER JOIN equipos ev
             ON p.id_equipo_visitante = ev.id_equipo
         LEFT JOIN predicciones pr
-            ON u.id_usuario = pr.id_usuario
-           AND p.id_partido = pr.id_partido
+            ON pr.id_usuario = u.id_usuario
+           AND pr.id_partido = p.id_partido
         LEFT JOIN puntajes_partido pp
-            ON u.id_usuario = pp.id_usuario
-           AND p.id_partido = pp.id_partido
-
+            ON pp.id_usuario = u.id_usuario
+           AND pp.id_partido = p.id_partido
         WHERE LOWER(TRIM(u.rol)) = 'participante'
           AND u.estado_activo = 1
           AND p.id_equipo_local IS NOT NULL
           AND p.id_equipo_visitante IS NOT NULL
-          AND {today_condition}
-
+          AND {today_condition_sql("p.fecha_hora_partido")}
+          {participant_filter}
         ORDER BY
-            p.fecha_hora_partido ASC,
-            p.id_partido ASC,
-            u.nombre ASC
-    """
+            u.nombre,
+            p.fecha_hora_partido,
+            p.id_partido
+    """, params)
 
-    df = fetch_df(sql)
-
-    if df is None or df.empty:
+    if df.empty:
         return pd.DataFrame()
 
-    matches_df = (
-        df[
-            [
-                "id_partido",
-                "equipo_local",
-                "equipo_visitante",
-                "fecha_hora_partido",
-                "estado_partido",
-            ]
-        ]
-        .drop_duplicates()
-        .sort_values(by=["fecha_hora_partido", "id_partido"], ascending=True)
-        .reset_index(drop=True)
-    )
-
-    participants_df = (
+    participants = (
         df[["id_usuario", "participante"]]
         .drop_duplicates()
-        .sort_values(by=["participante"], ascending=True)
-        .reset_index(drop=True)
+        .sort_values("participante")
+    )
+
+    matches = (
+        df[[
+            "id_partido",
+            "fecha_hora_partido",
+            "estado_partido",
+            "equipo_local",
+            "equipo_visitante",
+            "goles_local_real",
+            "goles_visitante_real",
+        ]]
+        .drop_duplicates()
+        .sort_values(["fecha_hora_partido", "id_partido"])
     )
 
     rows = []
 
-    for _, participant in participants_df.iterrows():
-        id_usuario = int(participant["id_usuario"])
-        participante = participant["participante"]
-
-        user_rows = df[df["id_usuario"] == id_usuario].copy()
-
-        row = {
-            "Participante": participante,
+    for _, participant in participants.iterrows():
+        row_data: dict[str, Any] = {
+            "Participante": participant["participante"],
         }
 
-        total_matches = len(matches_df)
+        participant_df = df[df["id_usuario"] == participant["id_usuario"]]
 
-        for idx, match in matches_df.iterrows():
-            id_partido = int(match["id_partido"])
+        for match_index, match in matches.iterrows():
+            id_partido = match["id_partido"]
+            equipo_local = match["equipo_local"]
+            equipo_visitante = match["equipo_visitante"]
 
-            equipo_local = str(match["equipo_local"])
-            equipo_visitante = str(match["equipo_visitante"])
-            estado_partido = str(match["estado_partido"])
+            hora = pd.to_datetime(match["fecha_hora_partido"]).strftime("%H:%M")
+            estado = match["estado_partido"]
 
-            fecha_partido = pd.to_datetime(match["fecha_hora_partido"])
-            hora_partido = fecha_partido.strftime("%H:%M")
+            match_label = f"{equipo_local} vs {equipo_visitante} - {hora} - {estado}"
 
-            partido_base = f"{equipo_local}-{equipo_visitante}"
+            prediction_row = participant_df[
+                participant_df["id_partido"] == id_partido
+            ]
 
-            columna_prediccion = f"{partido_base} - {hora_partido} - {estado_partido}"
-            columna_marcador = f"{partido_base} - Marcador Partido"
-            columna_puntos = f"{partido_base} - puntos obtenidos"
-
-            match_row = user_rows[user_rows["id_partido"] == id_partido]
-
-            if match_row.empty:
-                prediccion = ""
-                marcador_partido = estado_partido
-                puntos_obtenidos = ""
+            if prediction_row.empty:
+                prediction_value = ""
+                points_value = ""
             else:
-                record = match_row.iloc[0]
-
-                if pd.notna(record["goles_local_predicho"]) and pd.notna(record["goles_visitante_predicho"]):
-                    prediccion = f"{int(record['goles_local_predicho'])}-{int(record['goles_visitante_predicho'])}"
-                else:
-                    prediccion = ""
+                prediction = prediction_row.iloc[0]
 
                 if (
-                    estado_partido in ("En juego", "Terminado")
-                    and pd.notna(record["goles_local_real"])
-                    and pd.notna(record["goles_visitante_real"])
+                    pd.notna(prediction["goles_local_predicho"])
+                    and pd.notna(prediction["goles_visitante_predicho"])
                 ):
-                    marcador_partido = f"{int(record['goles_local_real'])}-{int(record['goles_visitante_real'])}"
-                    puntos_obtenidos = int(record["puntos"]) if pd.notna(record["puntos"]) else 0
+                    prediction_value = (
+                        f"{int(prediction['goles_local_predicho'])}"
+                        f"-"
+                        f"{int(prediction['goles_visitante_predicho'])}"
+                    )
                 else:
-                    marcador_partido = estado_partido
-                    puntos_obtenidos = ""
+                    prediction_value = ""
 
-            row[columna_prediccion] = prediccion
-            row[columna_marcador] = marcador_partido
-            row[columna_puntos] = puntos_obtenidos
+                points_value = (
+                    int(prediction["puntos_obtenidos"])
+                    if pd.notna(prediction["puntos_obtenidos"])
+                    else ""
+                )
 
-            if idx < total_matches - 1:
-                row[f"──────── {idx + 1}"] = ""
+            if (
+                pd.notna(match["goles_local_real"])
+                and pd.notna(match["goles_visitante_real"])
+            ):
+                real_score = (
+                    f"{int(match['goles_local_real'])}"
+                    f"-"
+                    f"{int(match['goles_visitante_real'])}"
+                )
+            else:
+                real_score = ""
 
-        rows.append(row)
+            row_data[match_label] = prediction_value
+            row_data[f"{match_label} - Marcador Partido"] = real_score
+            row_data[f"{match_label} - puntos obtenidos"] = points_value
+            row_data[f"──────── {id_partido}"] = ""
 
-    result = pd.DataFrame(rows)
+        rows.append(row_data)
 
-    return result
+    return pd.DataFrame(rows)
 
-# =========================================================
-# COMPATIBILIDAD
-# =========================================================
 
 def get_recent_predictions() -> pd.DataFrame:
     """
-    Conservada por compatibilidad.
+    Compatibilidad con código anterior.
     """
+
     return get_today_predictions_matrix()
+
+
+# =========================================================
+# UTILIDADES ADICIONALES
+# =========================================================
+
+def has_scorable_matches() -> bool:
+    row = fetch_one("""
+        SELECT COUNT(*) AS total
+        FROM partidos
+        WHERE estado_partido IN ('En juego', 'Terminado')
+          AND goles_local_real IS NOT NULL
+          AND goles_visitante_real IS NOT NULL
+    """)
+
+    if not row:
+        return False
+
+    return int(row["total"]) > 0
