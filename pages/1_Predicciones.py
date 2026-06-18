@@ -248,18 +248,17 @@ for _, match in matches.iterrows():
                                 st.error(mensaje)
 
                     with col_no:
-                        if st.button(
+                        st.button(
                             "Cancelar",
                             key=f"cancelar_confirmacion_{id_partido}",
-                        ):
-                            clear_pending_confirmation()
-                            st.rerun()
+                            on_click=clear_pending_confirmation,
+                        )
 
                 else:
-                    if st.button(
+                    st.button(
                         "Confirmar predicción",
                         key=f"abrir_confirmacion_{id_partido}",
                         disabled=not puede_editar,
-                    ):
-                        set_pending_confirmation(id_partido)
-                        st.rerun()
+                        on_click=set_pending_confirmation,
+                        args=(id_partido,),
+                    )
