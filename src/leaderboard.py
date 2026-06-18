@@ -481,7 +481,8 @@ def get_today_predictions_matrix(participant_name: str | None = None) -> pd.Data
             hora = pd.to_datetime(match["fecha_hora_partido"]).strftime("%H:%M")
             estado = match["estado_partido"]
 
-            match_label = f"{equipo_local} vs {equipo_visitante} - {hora} - {estado}"
+            #match_label = f"{equipo_local} vs {equipo_visitante} - {hora} - {estado}"
+            match_label = f"{equipo_local} vs {equipo_visitante}"
 
             prediction_row = participant_df[
                 participant_df["id_partido"] == id_partido
@@ -523,10 +524,10 @@ def get_today_predictions_matrix(participant_name: str | None = None) -> pd.Data
             else:
                 real_score = ""
 
-            row_data[match_label] = prediction_value
-            row_data[f"{match_label} - Marcador Partido"] = real_score
-            row_data[f"{match_label} - puntos obtenidos"] = points_value
-            row_data[f"──────── {id_partido}"] = ""
+            row_data[f"{match_label} - Predicción"] = prediction_value
+            row_data[f"{match_label} - {hora} - {estado} - Marcador Partido"] = real_score
+            row_data[f"{id_partido} Puntos obtenidos"] = points_value
+            row_data[f"─ {id_partido}"] = ""
 
         rows.append(row_data)
 
