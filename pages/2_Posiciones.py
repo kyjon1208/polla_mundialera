@@ -197,4 +197,11 @@ else:
         filtered_today_matrix,
         use_container_width=True,
         hide_index=True,
+        column_config={
+        "Participante": st.column_config.TextColumn(
+            "Participante",
+            pinned=True,
+            width="medium",
+        )
+        },
     )
