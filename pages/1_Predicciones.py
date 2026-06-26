@@ -41,9 +41,13 @@ if user.get("rol") != "participante":
 # ACTUALIZAR BLOQUEOS Y 0-0
 # =========================================================
 
-delete_admin_predictions()
 lock_expired_predictions()
-ensure_default_predictions_for_all_participants()
+
+if "predicciones_default_aseguradas" not in st.session_state:
+    delete_admin_predictions()
+    ensure_default_predictions_for_all_participants()
+
+    st.session_state["predicciones_default_aseguradas"] = True
 
 
 # =========================================================
